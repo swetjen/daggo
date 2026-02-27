@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Virtuous</title>
+
+    <style>
+        :root {
+            --bg: #0b0f14;
+            --bg-elevated: #111827;
+            --ink: #e5e7eb;
+            --ink-muted: #9ca3af;
+
+            --accent: #7dd3fc;   /* cyan */
+            --accent-2: #a78bfa; /* violet */
+
+            --border: rgba(148, 163, 184, 0.16);
+            --glow: rgba(125, 211, 252, 0.35);
+        }
+
+        .kw { color: #7dd3fc; }
+        .str { color: #a7f3d0; }
+        .com { color: #64748b; }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 72px 24px;
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            background:
+                    radial-gradient(900px 500px at 15% -10%, #111827 0%, transparent 60%),
+                    radial-gradient(800px 400px at 85% 0%, #020617 0%, transparent 55%),
+                    var(--bg);
+            color: var(--ink);
+            display: flex;
+            justify-content: center;
+        }
+
+        .wrap {
+            max-width: 880px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .badge {
+            display: inline-block;
+            margin-bottom: 20px;
+            margin-top: 20px;
+            padding: 6px 12px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(17, 24, 39, 0.6);
+        }
+
+        h1 {
+            font-size: 48px;
+            line-height: 1.05;
+            margin: 0 0 16px;
+            letter-spacing: -0.03em;
+            font-weight: 600;
+        }
+
+        h1 span {
+            background: linear-gradient(90deg, var(--accent), var(--accent-2));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        p {
+            max-width: 640px;
+            margin: 0 auto 28px;
+            font-size: 18px;
+            line-height: 1.6;
+            color: var(--ink-muted);
+        }
+
+        .links {
+            display: flex;
+            gap: 14px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 40px;
+        }
+
+        .btn {
+            padding: 10px 18px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--ink);
+            background: linear-gradient(180deg, #0f172a, #020617);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            text-decoration: none;
+            transition: border 150ms ease, box-shadow 150ms ease;
+        }
+
+        .btn.primary {
+            background: linear-gradient(
+                    90deg,
+                    rgba(125, 211, 252, 0.12),
+                    rgba(167, 139, 250, 0.12)
+            );
+            border-color: rgba(125, 211, 252, 0.4);
+        }
+
+        .btn:hover {
+            box-shadow: 0 0 0 1px var(--glow);
+        }
+
+        .card {
+            position: relative;
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 20px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            text-align: left;
+        }
+
+        pre {
+            margin: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #e5e7eb;
+            background: transparent;
+            overflow-x: auto;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            padding: 6px 10px;
+            font-size: 12px;
+            color: var(--ink-muted);
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 120ms ease, border 120ms ease;
+        }
+
+        .copy-btn:hover {
+            color: var(--ink);
+            border-color: var(--accent);
+        }
+
+        .accordion {
+            max-width: 760px;
+            margin: 32px auto 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .accordion-toggle {
+            width: 100%;
+            padding: 14px 16px;
+            background: transparent;
+            color: var(--ink);
+            border: none;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .accordion-toggle::after {
+            content: "▸";
+            float: right;
+            transition: transform 150ms ease;
+        }
+
+        .accordion-toggle.active::after {
+            transform: rotate(90deg);
+        }
+
+        .accordion-panel {
+            display: none;
+            padding: 16px;
+            background: var(--bg-elevated);
+        }
+
+        .accordion-panel.open {
+            display: block;
+        }
+
+        pre,
+        pre code {
+            text-align: left;
+        }
+
+        .client-notes {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 8px 16px 0;
+            font-size: 12px;
+            color: var(--ink-muted);
+        }
+
+        .client-notes span {
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: rgba(17, 24, 39, 0.4);
+        }
+
+        .accordion-panel .client-notes {
+            padding: 4px 0 12px;
+        }
+
+        .accordion-panel .client-notes span {
+            opacity: 0.9;
+        }
+
+        :root {
+            --brand-pink: #ec4899;   /* magenta / pink */
+            --brand-pink-soft: #f472b6;
+        }
+
+        .logo-mark-pink {
+            margin: 72px auto 0;
+            text-align: center;
+            font-family: Helvetica, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+
+            font-size: 40px;      /* slightly smaller than headline */
+            font-weight: 650;     /* heavier to compensate */
+            letter-spacing: 0.02em;  /* 👈 big fix: much tighter */
+
+            color: var(--brand-pink);
+            opacity: 0.95;
+        }
+
+        .key {
+            color: #e5e7eb;          /* strong neutral */
+        }
+
+        .val {
+            color: #a78bfa;          /* violet – distinct from kw */
+        }
+
+        .opt {
+            color: #94a3b8;          /* muted */
+            font-style: italic;
+        }
+
+        .gen {
+            color: #475569;   /* dim */
+            font-style: italic;
+        }
+
+
+
+    </style>
+</head>
+
+<body>
+<div class="wrap">
+
+    <div class="logo-mark-pink">
+        Virtuous
+    </div>
+
+    <div class="badge">Agent First API Framework</div>
+
+    <h1>Built for <span>reliable APIs</span></h1>
+
+    <p>
+        Virtuous introduces typing to routes, handlers and guards, producing OpenAPI and
+        native clients without codegen or config drift.
+    </p>
+
+    <div class="links">
+        <a class="btn primary" href="/docs/">View Docs</a>
+        <a class="btn" href="/openapi.json">OpenAPI JSON</a>
+        <a class="btn" href="https://github.com/swetjen/virtuous">GitHub</a>
+    </div>
+
+    <div class="card">
+        <button class="copy-btn" onclick="copySnippet(this)">Copy</button>
+        <pre><code id="snippet">curl -H "Authorization: Bearer dev-admin-token" \
+http://localhost:8000/api/v1/admin/users/</code></pre>
+    </div>
+
+    <p class="explainer">
+        These clients are generated directly from the same typed routes and guards.
+        Updating a route or type signature is immediately reflected below.
+    </p>
+
+    <div class="accordion">
+
+        <button class="accordion-toggle" onclick="toggleAndLoad(this, 'js', '/client.gen.js')">
+            JavaScript Client
+        </button>
+
+        <div class="accordion-panel">
+            <div class="client-notes">
+                <span>Lightweight</span>
+                <span>JSDoc types</span>
+                <span>Fetch-based</span>
+                <span>Explicit errors</span>
+                <span>Diff-friendly</span>
+            </div>
+
+            <pre class="code js"><code>Loading…</code></pre>
+        </div>
+
+
+        <button class="accordion-toggle" onclick="toggleAndLoad(this, 'ts', '/client.gen.ts')">
+            TypeScript Client
+        </button>
+        <div class="accordion-panel">
+            <pre class="code ts"><code>Loading…</code></pre>
+        </div>
+
+        <button class="accordion-toggle" onclick="toggleAndLoad(this, 'py', '/client.gen.py')">
+            Python Client
+        </button>
+        <div class="accordion-panel">
+            <pre class="code py"><code>Loading…</code></pre>
+        </div>
+
+    </div>
+
+
+</div>
+<script>
+    /* -----------------------------
+     * Accordion behavior + fetching
+     * ----------------------------- */
+
+    const fetched = new Set()
+
+    async function toggleAndLoad(btn, lang, url) {
+        btn.classList.toggle("active")
+        const panel = btn.nextElementSibling
+        panel.classList.toggle("open")
+
+        if (!panel.classList.contains("open")) return
+        if (fetched.has(url)) return
+
+        const pre = panel.querySelector("pre")
+        const codeEl = pre.querySelector("code")
+
+        try {
+            const res = await fetch(url)
+            if (!res.ok) {
+                throw new Error(`${res.status} ${res.statusText}`)
+            }
+
+            const text = await res.text()
+            codeEl.textContent = text
+            highlightBlock(pre, lang)
+            fetched.add(url)
+
+        } catch (err) {
+            codeEl.textContent =
+                `Unable to load ${url}\n\n${err.message}`
+        }
+    }
+
+
+    /* -----------------------------
+     * Curl snippet copy
+     * ----------------------------- */
+
+    function copySnippet(btn) {
+        const code = document.getElementById("snippet").innerText
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = "Copied"
+            setTimeout(() => (btn.textContent = "Copy"), 1400)
+        })
+    }
+</script>
+<script>
+    const rules = {
+        js: [
+            { regex: /\b(import|export|from|const|let|async|await|new|return|class)\b/g, cls: "kw" },
+
+            // generated header comments
+            { regex: /(\/\/.*Code generated by Virtuous.*)/g, cls: "gen" },
+            { regex: /(\/\/.*Virtuous client hash.*)/g, cls: "gen" },
+
+            // JSDoc types: {AdminUser}
+            { regex: /\{([A-Z][A-Za-z0-9_]*)\}/g, cls: "val" },
+
+            // optional marker: ?
+            { regex: /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\?/g, cls: "opt" },
+            // optional JSDoc fields: [error]
+            { regex: /\[([a-zA-Z_][a-zA-Z0-9_]*)\]/g, cls: "opt" },
+
+
+            // JSDoc property names
+            { regex: /@property\s+\{[^}]+\}\s+([a-zA-Z_][a-zA-Z0-9_]*)/g, cls: "key" },
+
+            { regex: /(".*?"|'.*?'|`.*?`)/g, cls: "str" },
+            { regex: /(\/\/.*)/g, cls: "com" },
+        ],
+
+        ts: [
+            // keywords
+            { regex: /\b(import|export|from|const|let|async|await|new|return|class|interface|type)\b/g, cls: "kw" },
+
+            // generated header comments
+            { regex: /(\/\/.*Code generated by Virtuous.*)/g, cls: "gen" },
+            { regex: /(\/\/.*Virtuous client hash.*)/g, cls: "gen" },
+
+
+            // keys:   email:
+            { regex: /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, cls: "key" },
+
+            // optional marker: ?
+            { regex: /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\?/g, cls: "opt" },
+
+
+            // values: : string
+            { regex: /:\s*([A-Z][A-Za-z0-9_<>[\]]*|string|number|boolean|any)\b/g, cls: "val" },
+
+            // strings
+            { regex: /(".*?"|'.*?'|`.*?`)/g, cls: "str" },
+
+            // comments
+            { regex: /(\/\/.*)/g, cls: "com" },
+        ],
+
+        py: [
+            { regex: /\b(from|import|def|class|return|async|await)\b/g, cls: "kw" },
+
+            // Optional[T]
+            { regex: /\bOptional\[[^\]]+\]/g, cls: "opt" },
+
+            // keys: email:
+            { regex: /^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:/gm, cls: "key" },
+
+            // values: : str
+            { regex: /:\s*(str|int|float|bool|list|dict|Optional\[[^\]]+\])\b/g, cls: "val" },
+
+            { regex: /(".*?"|'.*?')/g, cls: "str" },
+            { regex: /(#.*)/g, cls: "com" },
+        ],
+
+    }
+
+    function highlightBlock(pre, lang) {
+        const raw = pre.textContent
+        let html = escapeHTML(raw)
+
+        const placeholders = []
+        let idx = 0
+
+        for (const { regex, cls } of rules[lang] || []) {
+            html = html.replace(regex, match => {
+                const key = `@@H${idx++}@@`
+                placeholders.push({ key, value: `<span class="${cls}">${match}</span>` })
+                return key
+            })
+        }
+
+        for (const { key, value } of placeholders) {
+            html = html.replaceAll(key, value)
+        }
+
+        pre.innerHTML = `<code>${html}</code>`
+    }
+
+    function escapeHTML(str) {
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+    }
+</script>
+
+
+
+
+</body>
+</html>

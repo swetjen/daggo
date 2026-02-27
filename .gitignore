@@ -1,0 +1,10 @@
+ERRORS
+
+.generated/
+/daggo.sqlite*
+runtime/
+.env
+.env.local
+.idea/
+frontend-web/dist/
+tmp/screens/
