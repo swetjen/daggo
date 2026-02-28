@@ -1,6 +1,6 @@
 package jobs
 
-import "daggo/dag"
+import "github.com/swetjen/daggo/dag"
 
 func DefaultRegistry() *dag.Registry {
 	registry := dag.NewRegistry()

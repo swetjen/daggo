@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"daggo/db"
+	"github.com/swetjen/daggo/db"
 )
 
 func TestRegistrySyncToDBPrunesUnregisteredJobs(t *testing.T) {

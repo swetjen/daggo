@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	"daggo/db"
+	"github.com/swetjen/daggo/db"
 )
 
 type Registry struct {

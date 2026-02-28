@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"daggo/dag"
+	"github.com/swetjen/daggo/dag"
 )
 
 type UIFailureAOutput struct {

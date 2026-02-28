@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"daggo/db"
+	"github.com/swetjen/daggo/db"
 	"github.com/robfig/cron/v3"
 )
 

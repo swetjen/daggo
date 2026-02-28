@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"daggo/db"
+	"github.com/swetjen/daggo/db"
 )
 
 type Executor struct {
@@ -27,6 +27,7 @@ type Executor struct {
 
 	executionMode string
 	workerBinary  string
+	workerCommand []string
 
 	processesMu sync.Mutex
 	processes   map[int64]runProcess
@@ -62,6 +63,7 @@ func NewExecutor(queries *db.Queries, pool *sql.DB, registry *Registry, queueSiz
 		terminated: make(map[int64]struct{}),
 	}
 	executor.SetExecutionMode(ExecutionModeInProcess)
+	executor.SetWorkerCommand("daggo-worker")
 	executor.runMaxConcurrentRuns.Store(1)
 	executor.runMaxConcurrentSteps.Store(1)
 	return executor
@@ -97,6 +99,35 @@ func (e *Executor) SetWorkerBinary(path string) {
 		return
 	}
 	e.workerBinary = strings.TrimSpace(path)
+}
+
+func (e *Executor) SetWorkerCommand(args ...string) {
+	if e == nil {
+		return
+	}
+	if len(args) == 0 {
+		e.workerCommand = []string{"daggo-worker"}
+		return
+	}
+	command := make([]string, 0, len(args))
+	for _, arg := range args {
+		if trimmed := strings.TrimSpace(arg); trimmed != "" {
+			command = append(command, trimmed)
+		}
+	}
+	if len(command) == 0 {
+		command = []string{"daggo-worker"}
+	}
+	e.workerCommand = command
+}
+
+func (e *Executor) workerCommandArgs() []string {
+	if e == nil || len(e.workerCommand) == 0 {
+		return []string{"daggo-worker"}
+	}
+	out := make([]string, len(e.workerCommand))
+	copy(out, e.workerCommand)
+	return out
 }
 
 func (e *Executor) workerBinaryPath() string {
@@ -181,7 +212,7 @@ func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) {
 		return
 	}
 
-	args := []string{"worker", "--run-id", strconv.FormatInt(runID, 10)}
+	args := append(e.workerCommandArgs(), "--run-id", strconv.FormatInt(runID, 10))
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard

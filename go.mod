@@ -1,4 +1,4 @@
-module daggo
+module github.com/swetjen/daggo
 
 go 1.25
 

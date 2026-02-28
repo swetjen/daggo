@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"daggo/db"
+	"github.com/swetjen/daggo/db"
 )
 
 type recordingEnqueuer struct {

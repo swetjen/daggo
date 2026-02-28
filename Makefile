@@ -34,7 +34,7 @@ gen-all:
 	make gen-web
 
 run:
-	reflex -r '(^|/)(cmd|config|dag|db|deps|handlers|frontend-web/src)/.*\.(go|html|js|ts|tsx)$$|(^|/)router\.go$$|(^|/)frontend_embed\.go$$|(^|/)client_gen\.go$$|(^|/)\.env$$' -s -- sh -c "go run ./cmd/api/main.go"
+	reflex -r '(^|/)(cmd|config|dag|db|deps|handlers|frontend-web/src)/.*\.(go|html|js|ts|tsx)$$|(^|/)router\.go$$|(^|/)frontend_embed\.go$$|(^|/)client_gen\.go$$|(^|/)\.env$$' -s -- sh -c "go run ./cmd/api"
 
 agent-run:
-	@bash -c ': > ERRORS; reflex -r '\''(^|/)(cmd|config|dag|db|deps|handlers|frontend-web/src)/.*\.(go|html|js|ts|tsx)$$|(^|/)router\.go$$|(^|/)frontend_embed\.go$$|(^|/)client_gen\.go$$|(^|/)\.env$$'\'' -s -- sh -c "go run ./cmd/api/main.go" 2>&1 | tee ERRORS'
+	@bash -c ': > ERRORS; reflex -r '\''(^|/)(cmd|config|dag|db|deps|handlers|frontend-web/src)/.*\.(go|html|js|ts|tsx)$$|(^|/)router\.go$$|(^|/)frontend_embed\.go$$|(^|/)client_gen\.go$$|(^|/)\.env$$'\'' -s -- sh -c "go run ./cmd/api" 2>&1 | tee ERRORS'

@@ -3,8 +3,8 @@ package schedules
 import (
 	"context"
 
-	"daggo/db"
-	"daggo/deps"
+	"github.com/swetjen/daggo/db"
+	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
 )
 

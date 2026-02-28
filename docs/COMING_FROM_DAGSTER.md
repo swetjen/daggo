@@ -73,10 +73,10 @@ DAGGO uses an operator-focused shell:
 - Prefer deterministic outputs and explicit step keys.
 - Keep job behavior stable under code changes by preserving step/output types.
 
-## Repository Direction
+## Package Direction
 
-Current state is monorepo-first to accelerate iteration.
+DAGGO is intended to be imported into your own Go application:
 
-Planned split:
-- standalone DAGGO package/runtime
-- separate implementation repository with project-specific jobs and integrations
+- define jobs in your application code
+- configure DAGGO through `daggo.Config`
+- start the runtime with `daggo.Main(...)` or `daggo.NewApp(...)`

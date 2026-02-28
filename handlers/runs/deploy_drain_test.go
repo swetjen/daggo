@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"daggo/dag"
-	"daggo/deps"
+	"github.com/swetjen/daggo/dag"
+	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
 )
 

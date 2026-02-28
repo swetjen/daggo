@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"time"
 
-	"daggo/config"
-	"daggo/dag"
-	"daggo/db"
-	"daggo/jobs"
+	"github.com/swetjen/daggo/config"
+	"github.com/swetjen/daggo/dag"
+	"github.com/swetjen/daggo/db"
 )
 
 // Deps contains shared runtime dependencies for handlers.
@@ -23,29 +22,36 @@ type Deps struct {
 }
 
 func New(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB) (*Deps, error) {
-	registry := jobs.DefaultRegistry()
+	return NewWithRegistry(ctx, cfg, queries, pool, nil)
+}
+
+func NewWithRegistry(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (*Deps, error) {
+	cfg = cfg.Normalized()
+	if registry == nil {
+		registry = dag.NewRegistry()
+	}
 	if err := registry.SyncToDB(ctx, queries, pool); err != nil {
 		return nil, err
 	}
 	deployLock := dag.NewDeployLock(
-		cfg.DeployLockPath,
-		time.Duration(cfg.DeployLockPollSeconds)*time.Second,
-		time.Duration(cfg.DeployDrainGraceSeconds)*time.Second,
+		cfg.Deploy.LockPath,
+		time.Duration(cfg.Deploy.PollSeconds)*time.Second,
+		time.Duration(cfg.Deploy.DrainGraceSeconds)*time.Second,
 	)
-	if err := dag.EnsureDeployLockDir(cfg.DeployLockPath); err != nil {
+	if err := dag.EnsureDeployLockDir(cfg.Deploy.LockPath); err != nil {
 		return nil, err
 	}
-	executor := dag.NewExecutor(queries, pool, registry, cfg.RunQueueSize)
-	executor.SetExecutionMode(cfg.RunExecutionMode)
-	executor.SetRunMaxConcurrentRuns(cfg.RunMaxConcurrentRuns)
-	executor.SetRunMaxConcurrentSteps(cfg.RunMaxConcurrentSteps)
+	executor := dag.NewExecutor(queries, pool, registry, cfg.Execution.QueueSize)
+	executor.SetExecutionMode(cfg.Execution.Mode)
+	executor.SetRunMaxConcurrentRuns(cfg.Execution.MaxConcurrentRuns)
+	executor.SetRunMaxConcurrentSteps(cfg.Execution.MaxConcurrentSteps)
 	scheduler := dag.NewScheduler(queries, pool, executor, dag.SchedulerOptions{
-		SchedulerKey:  cfg.SchedulerKey,
-		TickInterval:  time.Duration(cfg.SchedulerTickSeconds) * time.Second,
-		MaxDuePerTick: cfg.SchedulerMaxDuePerTick,
+		SchedulerKey:  cfg.Scheduler.Key,
+		TickInterval:  time.Duration(cfg.Scheduler.TickSeconds) * time.Second,
+		MaxDuePerTick: cfg.Scheduler.MaxDuePerTick,
 		DeployLock:    deployLock,
 	})
-	if cfg.SchedulerEnabled {
+	if cfg.Scheduler.Enabled {
 		scheduler.Start(ctx)
 	}
 	return &Deps{

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"daggo/dag"
+	"github.com/swetjen/daggo/dag"
 )
 
 type UILinearAOutput struct {

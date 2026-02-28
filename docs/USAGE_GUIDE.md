@@ -1,135 +1,108 @@
 # DAGGO Usage Guide
 
-This guide covers day-to-day usage of DAGGO as an operator and as a developer.
+This guide covers the package-level runtime flow for importing DAGGO into another Go application.
 
-## Operator Workflow
+## Package Flow
 
-1. Start DAGGO:
-```bash
-go run ./cmd/api/main.go
-```
-2. Open the UI at `http://localhost:8000/`.
-3. Use left navigation:
-- `Overview`: time-based execution timeline (running, succeeded, failed, scheduled).
-- `Jobs`: structural inventory of job definitions and schedules.
-- `Runs`: run-centric history with filters.
-4. Launch a run from a job detail page.
-5. Open run detail to inspect:
-- step DAG
-- step state counts
-- event feed (search/filter)
-- rerun from failed step
-- terminate run (when running)
+1. Define typed steps with `dag.Define[I, O]`.
+2. Build a job with `dag.NewJob(...).Add(...).MustBuild()`.
+3. Start from `daggo.DefaultConfig()`.
+4. Launch DAGGO with `daggo.Main(...)`, `daggo.Run(...)`, or build an `app` with `daggo.NewApp(...)`.
 
-## Developer Workflow
-
-## 1. Define Steps
-
-Steps are strongly typed Go functions:
+## Minimal Startup
 
 ```go
-type ExtractInput struct{}
-type ExtractOutput struct {
-	Records []string
-}
+cfg := daggo.DefaultConfig()
+cfg.Admin.Port = "8080"
+cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 
-func RunExtract(ctx context.Context, in ExtractInput) (ExtractOutput, error) {
-	return ExtractOutput{Records: []string{"a", "b"}}, nil
+if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil {
+	log.Fatal(err)
 }
 ```
 
-Use `dag.Define` to register each step.
+`daggo.Main(...)` automatically:
 
-## 2. Compose a Job
+- opens the configured database
+- applies bundled migrations
+- syncs registered jobs into the metadata tables
+- serves the embedded admin UI
+- serves RPC docs under `/rpc/docs/`
+- manages DAGGO's internal worker subprocess command
 
-Use `dag.NewJob(...).Add(...).MustBuild()`:
+## Embedded App Mode
+
+If you want to mount DAGGO inside a larger HTTP server, create an app directly:
 
 ```go
-extract := dag.Define[ExtractInput, ExtractOutput]("extract", RunExtract)
+app, err := daggo.NewApp(context.Background(), cfg, daggo.WithJobs(job))
+if err != nil {
+	log.Fatal(err)
+}
+defer app.Close()
 
-job := dag.NewJob("example_job").
-	WithDisplayName("Example Job").
-	WithDescription("Example DAGGO job").
-	Add(extract).
-	AddSchedule(dag.ScheduleDefinition{
-		Key:      "hourly",
-		CronExpr: "0 * * * *",
-		Timezone: "UTC",
-		Enabled:  true,
-	}).
-	MustBuild()
+myMux := http.NewServeMux()
+myMux.Handle("/daggo/", http.StripPrefix("/daggo", app.Handler()))
 ```
 
-## 3. Register Jobs
+## Configuration Surface
 
-Add built jobs in `jobs/registry.go` via `registry.MustRegister(...)`.
+The public config is centered on `daggo.Config`:
 
-## 4. Generate and Run
+- `Admin.Port`
+- `Database.Driver`
+- `Database.SQLite.Path`
+- `Database.SQLite.DSN`
+- `Database.Postgres.*`
+- `Execution.QueueSize`
+- `Execution.Mode`
+- `Execution.MaxConcurrentRuns`
+- `Execution.MaxConcurrentSteps`
+- `Scheduler.Enabled`
+- `Scheduler.Key`
+- `Scheduler.TickSeconds`
+- `Scheduler.MaxDuePerTick`
+- `Deploy.LockPath`
+- `Deploy.PollSeconds`
+- `Deploy.DrainGraceSeconds`
 
-```bash
-make gen-all
-go run ./cmd/api/main.go
+## Database Modes
+
+SQLite is the default and the recommended way to get started.
+
+```go
+cfg := daggo.DefaultConfig()
+cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 ```
 
-## Input Resolution Semantics
+PostgreSQL has a public config shape but is not implemented yet. The planned schema-provisioning approach lives in [docs/POSTGRES_RUNTIME_SPEC.md](POSTGRES_RUNTIME_SPEC.md).
 
-DAGGO wiring is type-driven and validated at build time (`MustBuild()`):
+## Input Resolution
 
-- Singular input `T`: exactly one upstream producer of `T` is required.
-- Slice input `[]T`: all upstream producers of `T` are injected in deterministic topological order; zero is allowed.
-- Pointer input `*T`: zero or one producer; zero injects `nil`, more than one is an error.
+DAGGO wiring is type-driven and validated at build time:
 
-No string-based wiring. No implicit preference rules.
+- Singular input `T`: exactly one upstream producer of `T`.
+- Slice input `[]T`: all upstream producers of `T`, in deterministic topological order.
+- Pointer input `*T`: zero or one producer, with `nil` when absent.
 
-## Scheduling
+No string-based wiring is required.
 
-- Cron-based schedules are attached to jobs.
-- Scheduler runs on a fixed tick (`SCHEDULER_TICK_SECONDS`).
-- Non-backfilling by default: it does not enqueue historical missed windows.
+## Execution
 
-## Execution Model
+Runs are created through the RPC API and executed asynchronously.
 
-Runs are created via RPC and executed asynchronously:
-
-- Default mode: `subprocess` (detached worker process per run)
+- Default mode: `subprocess`
 - Optional mode: `in_process`
 
-Concurrency knobs:
+Concurrency controls:
 
-- `RUN_MAX_CONCURRENT_RUNS`
-- `RUN_MAX_CONCURRENT_STEPS`
+- `cfg.Execution.MaxConcurrentRuns`
+- `cfg.Execution.MaxConcurrentSteps`
 
-## Observability
+## Local Repo Commands
 
-DAGGO stores run, step, and event state in SQLite:
-
-- Overview timeline: current and historical activity plus scheduled future intervals.
-- Runs list: dense operational run table.
-- Run detail: DAG visualization + step/event diagnostics.
-
-## Safe Deploy/Drain
-
-Create `runtime/WILL_DEPLOY` to trigger drain behavior:
-
-- New run creation/schedule enqueue is blocked.
-- Existing active runs are allowed to finish until grace timeout.
-- Process exits once idle (or after forced timeout).
-
-See `docs/WILL_DEPLOY_DRAIN_LOCK_PLAN.md`.
-
-## Troubleshooting
-
-- UI shows stale generated client:
-  - Run `make gen-sdk` and `make gen-web`.
-- SQL/query mismatch:
-  - Run `make gen`.
-- Broken local state:
-  - Remove `daggo.sqlite*` and restart.
-
-## Monorepo Direction
-
-Current repository combines engine + implementation.
-
-Planned direction:
-- extract DAGGO engine/runtime into a standalone package
-- keep project-specific job implementations in separate repos/services
+- `make gen`
+- `make gen-sdk`
+- `make gen-web`
+- `make gen-all`
+- `go test ./...`

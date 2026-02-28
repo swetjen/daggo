@@ -4,14 +4,13 @@ import (
 	"context"
 	"log"
 
-	api "daggo"
-	"daggo/config"
-	"daggo/db"
+	api "github.com/swetjen/daggo"
+	"github.com/swetjen/daggo/db"
 )
 
 func main() {
-	cfg := config.Load()
-	queries, pool, err := db.Open(context.Background(), cfg.DatabaseURL)
+	cfg := api.LoadConfigFromEnv()
+	queries, pool, err := db.OpenRuntime(context.Background(), cfg.Database)
 	if err != nil {
 		log.Fatal(err)
 	}

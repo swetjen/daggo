@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"daggo/deps"
+	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
 )
 

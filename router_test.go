@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"daggo"
-	"daggo/config"
-	"daggo/db"
+	"github.com/swetjen/daggo"
+	"github.com/swetjen/daggo/config"
+	"github.com/swetjen/daggo/db"
 )
 
 func TestGeneratedOutputs(t *testing.T) {

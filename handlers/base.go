@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"daggo/deps"
-	"daggo/handlers/jobs"
-	"daggo/handlers/runs"
-	"daggo/handlers/schedules"
+	"github.com/swetjen/daggo/deps"
+	"github.com/swetjen/daggo/handlers/jobs"
+	"github.com/swetjen/daggo/handlers/runs"
+	"github.com/swetjen/daggo/handlers/schedules"
 )
 
 type Handlers struct {
