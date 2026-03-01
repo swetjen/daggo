@@ -9,6 +9,20 @@
 
 DAGGO is a Go-native workflow orchestrator for teams that want to define jobs in Go, ship a single binary, and still get an admin UI, scheduling, run history, and step-level diagnostics out of the box.
 
+## Admin UI
+
+The embedded UI is intended to be usable immediately in an imported app: overview timeline, job graph, and run history in one place.
+
+![DAGGO overview timeline](docs/daggo-overview.png)
+
+The job detail view shows the DAG shape, configured schedules, and launch controls.
+
+![DAGGO job detail graph](docs/daggo-job.png)
+
+The runs view gives a run-centric history with filtering and drill-in diagnostics.
+
+![DAGGO runs history](docs/daggo-runs.png)
+
 ## What You Get
 
 - Typed DAG authoring with build-time validation.
@@ -150,6 +164,68 @@ Calling `daggo.Main(...)` or `daggo.Run(...)` gives new users a working runtime 
 6. Handles DAGGO's internal worker subprocess command inside the same application binary.
 
 Current schedules are derived from the jobs you register at startup. DAGGO does not persist future schedule definitions in the database; it persists scheduler bookkeeping and historical runs.
+
+## Recommended Project Structure
+
+For importing apps, the cleanest layout is usually:
+
+```text
+myapp/
+  main.go
+  jobs/
+    content_ingestion.go
+    customer_sync.go
+  ops/
+    deps.go
+    content_ops.go
+    customer_ops.go
+```
+
+- Put job definitions in `jobs/`.
+- Put concrete operational code in `ops/`.
+- Pass dependencies into an ops struct and bind DAGGO steps to methods on that struct.
+
+That keeps job wiring declarative while keeping dependency handling explicit and testable.
+
+```go
+package ops
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+)
+
+type Deps struct {
+	HTTP   *http.Client
+	Logger *slog.Logger
+}
+
+type ContentOps struct {
+	deps Deps
+}
+
+func NewContentOps(deps Deps) *ContentOps {
+	return &ContentOps{deps: deps}
+}
+
+func (o *ContentOps) ScrapePage(ctx context.Context, in ScrapePageInput) (ScrapePageOutput, error) {
+	_ = ctx
+	_ = in
+	o.deps.Logger.Info("scraping page")
+	return ScrapePageOutput{}, nil
+}
+```
+
+Then your job package can focus on graph composition:
+
+```go
+func ContentIngestionJob(ops *ops.ContentOps) dag.JobDefinition {
+	scrape := dag.Define[ScrapePageInput, ScrapePageOutput]("scrape_page", ops.ScrapePage)
+	// define the rest of the graph here
+	return dag.NewJob("content_ingestion").Add(scrape).MustBuild()
+}
+```
 
 ## Configuration
 

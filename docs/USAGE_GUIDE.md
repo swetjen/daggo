@@ -32,6 +32,95 @@ if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil
 
 Current schedules are taken from the jobs registered in memory at startup. DAGGO persists scheduler runtime state and run history, not future schedule definitions.
 
+## Recommended Project Layout
+
+For a real imported application, prefer separating graph wiring from operational code:
+
+```text
+myapp/
+  main.go
+  jobs/
+    content_ingestion.go
+    customer_sync.go
+  ops/
+    deps.go
+    content_ops.go
+    customer_ops.go
+```
+
+Recommended split:
+
+- `jobs/`: DAGGO job definitions, schedules, and graph composition.
+- `ops/`: concrete step implementations and the dependencies they need.
+
+This keeps job definitions declarative and makes dependency handling straightforward.
+
+### Dependency Pattern
+
+Prefer passing dependencies into a struct and exposing step functions as methods on that struct instead of relying on package globals.
+
+```go
+package ops
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+)
+
+type Deps struct {
+	HTTP   *http.Client
+	Logger *slog.Logger
+}
+
+type ContentOps struct {
+	deps Deps
+}
+
+func NewContentOps(deps Deps) *ContentOps {
+	return &ContentOps{deps: deps}
+}
+
+func (o *ContentOps) ScrapePage(ctx context.Context, in ScrapePageInput) (ScrapePageOutput, error) {
+	_ = ctx
+	_ = in
+	o.deps.Logger.Info("scraping page")
+	return ScrapePageOutput{}, nil
+}
+```
+
+Then bind those methods in `jobs/`:
+
+```go
+package jobs
+
+import (
+	"github.com/swetjen/daggo/dag"
+	"myapp/ops"
+)
+
+func ContentIngestion(ops *ops.ContentOps) dag.JobDefinition {
+	scrape := dag.Define[ScrapePageInput, ScrapePageOutput]("scrape_page", ops.ScrapePage)
+	extract := dag.Define[ExtractInput, ExtractOutput]("extract", ops.Extract)
+	update := dag.Define[UpdateInput, UpdateOutput]("update", ops.Update)
+
+	return dag.NewJob("content_ingestion").
+		Add(scrape, extract, update).
+		AddSchedule(dag.ScheduleDefinition{
+			CronExpr: "*/15 * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		MustBuild()
+}
+```
+
+This pattern gives you:
+
+- explicit dependency injection
+- simpler unit testing for ops
+- cleaner separation between orchestration shape and operational code
+
 ## Embedded App Mode
 
 If you want to mount DAGGO inside a larger HTTP server, create an app directly:
