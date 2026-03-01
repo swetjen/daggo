@@ -32,13 +32,13 @@ type UIMixedYOutput struct {
 }
 
 func UIMixedDurationJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UIMixedAOutput]("a", runUIMixedA).
+	stepA := dag.Op[dag.NoInput, UIMixedAOutput]("a", runUIMixedA).
 		WithDisplayName("A (short)")
-	stepB := dag.Define[UIMixedBInput, UIMixedBOutput]("b", runUIMixedB).
+	stepB := dag.Op[UIMixedBInput, UIMixedBOutput]("b", runUIMixedB).
 		WithDisplayName("B (short)")
-	stepX := dag.Define[dag.NoInput, UIMixedXOutput]("x", runUIMixedX).
+	stepX := dag.Op[dag.NoInput, UIMixedXOutput]("x", runUIMixedX).
 		WithDisplayName("X (long)")
-	stepY := dag.Define[UIMixedYInput, UIMixedYOutput]("y", runUIMixedY).
+	stepY := dag.Op[UIMixedYInput, UIMixedYOutput]("y", runUIMixedY).
 		WithDisplayName("Y (long)")
 
 	return dag.NewJob("ui_mixed_duration").

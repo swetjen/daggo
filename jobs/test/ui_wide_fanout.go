@@ -44,15 +44,15 @@ type UIWideFanoutEOutput struct {
 }
 
 func UIWideFanoutJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UIWideFanoutAOutput]("a", runUIWideFanoutA).
+	stepA := dag.Op[dag.NoInput, UIWideFanoutAOutput]("a", runUIWideFanoutA).
 		WithDisplayName("A")
-	stepB := dag.Define[UIWideFanoutBInput, UIWideFanoutBOutput]("b", runUIWideFanoutB).
+	stepB := dag.Op[UIWideFanoutBInput, UIWideFanoutBOutput]("b", runUIWideFanoutB).
 		WithDisplayName("B")
-	stepC := dag.Define[UIWideFanoutCInput, UIWideFanoutCOutput]("c", runUIWideFanoutC).
+	stepC := dag.Op[UIWideFanoutCInput, UIWideFanoutCOutput]("c", runUIWideFanoutC).
 		WithDisplayName("C")
-	stepD := dag.Define[UIWideFanoutDInput, UIWideFanoutDOutput]("d", runUIWideFanoutD).
+	stepD := dag.Op[UIWideFanoutDInput, UIWideFanoutDOutput]("d", runUIWideFanoutD).
 		WithDisplayName("D")
-	stepE := dag.Define[UIWideFanoutEInput, UIWideFanoutEOutput]("e", runUIWideFanoutE).
+	stepE := dag.Op[UIWideFanoutEInput, UIWideFanoutEOutput]("e", runUIWideFanoutE).
 		WithDisplayName("E")
 
 	return dag.NewJob("ui_wide_fanout").

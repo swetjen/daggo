@@ -36,13 +36,13 @@ type UILinearDOutput struct {
 }
 
 func UILinearChainJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UILinearAOutput]("a", runUILinearA).
+	stepA := dag.Op[dag.NoInput, UILinearAOutput]("a", runUILinearA).
 		WithDisplayName("A")
-	stepB := dag.Define[UILinearBInput, UILinearBOutput]("b", runUILinearB).
+	stepB := dag.Op[UILinearBInput, UILinearBOutput]("b", runUILinearB).
 		WithDisplayName("B")
-	stepC := dag.Define[UILinearCInput, UILinearCOutput]("c", runUILinearC).
+	stepC := dag.Op[UILinearCInput, UILinearCOutput]("c", runUILinearC).
 		WithDisplayName("C")
-	stepD := dag.Define[UILinearDInput, UILinearDOutput]("d", runUILinearD).
+	stepD := dag.Op[UILinearDInput, UILinearDOutput]("d", runUILinearD).
 		WithDisplayName("D")
 
 	return dag.NewJob("ui_linear_chain").

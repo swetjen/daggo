@@ -20,12 +20,12 @@ func TestRegistrySyncToDBRetainsUnregisteredJobs(t *testing.T) {
 	})
 
 	jobA := NewJob("job_a").
-		Add(Define[NoInput, struct{}]("step_a", func(_ context.Context, _ NoInput) (struct{}, error) {
+		Add(Op[NoInput, struct{}]("step_a", func(_ context.Context, _ NoInput) (struct{}, error) {
 			return struct{}{}, nil
 		})).
 		MustBuild()
 	jobB := NewJob("job_b").
-		Add(Define[NoInput, struct{}]("step_b", func(_ context.Context, _ NoInput) (struct{}, error) {
+		Add(Op[NoInput, struct{}]("step_b", func(_ context.Context, _ NoInput) (struct{}, error) {
 			return struct{}{}, nil
 		})).
 		MustBuild()

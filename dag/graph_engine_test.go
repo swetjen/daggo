@@ -28,16 +28,16 @@ type graphDIn struct {
 }
 
 func TestGraphBuild_DiamondConstruction(t *testing.T) {
-	stepA := Define[NoInput, graphAOut]("a", func(_ context.Context, _ NoInput) (graphAOut, error) {
+	stepA := Op[NoInput, graphAOut]("a", func(_ context.Context, _ NoInput) (graphAOut, error) {
 		return graphAOut{}, nil
 	})
-	stepB := Define[graphBIn, graphBOut]("b", func(_ context.Context, _ graphBIn) (graphBOut, error) {
+	stepB := Op[graphBIn, graphBOut]("b", func(_ context.Context, _ graphBIn) (graphBOut, error) {
 		return graphBOut{}, nil
 	})
-	stepC := Define[graphCIn, graphCOut]("c", func(_ context.Context, _ graphCIn) (graphCOut, error) {
+	stepC := Op[graphCIn, graphCOut]("c", func(_ context.Context, _ graphCIn) (graphCOut, error) {
 		return graphCOut{}, nil
 	})
-	stepD := Define[graphDIn, graphDOut]("d", func(_ context.Context, _ graphDIn) (graphDOut, error) {
+	stepD := Op[graphDIn, graphDOut]("d", func(_ context.Context, _ graphDIn) (graphDOut, error) {
 		return graphDOut{}, nil
 	})
 

@@ -13,7 +13,7 @@ type UIFailureAuditOutput struct {
 }
 
 func UIFailureAuditJob() dag.JobDefinition {
-	uiFailureAudit := dag.Define[dag.NoInput, UIFailureAuditOutput]("always_fail", runAlwaysFail).
+	uiFailureAudit := dag.Op[dag.NoInput, UIFailureAuditOutput]("always_fail", runAlwaysFail).
 		WithDisplayName("Always Fail").
 		WithDescription("Intentionally fails every execution for UI failure-state auditing.")
 

@@ -1,7 +1,7 @@
 # Job Definitions Simplification TODO
 
 1. Split large jobs into stage-focused files so DAG wiring is separate from domain utilities and external integration logic.
-2. Add helpers for repeated node declaration boilerplate (`dag.Define(...).WithDisplayName(...).WithDescription(...)`) and schedule boilerplate.
+2. Add helpers for repeated node declaration boilerplate (`dag.Op(...).WithDisplayName(...).WithDescription(...)`) and schedule boilerplate.
 3. Replace map-based runtime parameter parsing with one typed config decode path.
 4. Convert raw integer status constants into typed enums plus shared status metadata maps.
 5. Standardize job logging on one structured path (avoid mixed logger and raw `fmt.Printf` patterns).

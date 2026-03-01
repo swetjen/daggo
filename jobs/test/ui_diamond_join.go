@@ -37,13 +37,13 @@ type UIDiamondDOutput struct {
 }
 
 func UIDiamondJoinJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UIDiamondAOutput]("a", runUIDiamondA).
+	stepA := dag.Op[dag.NoInput, UIDiamondAOutput]("a", runUIDiamondA).
 		WithDisplayName("A")
-	stepB := dag.Define[UIDiamondBInput, UIDiamondBOutput]("b", runUIDiamondB).
+	stepB := dag.Op[UIDiamondBInput, UIDiamondBOutput]("b", runUIDiamondB).
 		WithDisplayName("B")
-	stepC := dag.Define[UIDiamondCInput, UIDiamondCOutput]("c", runUIDiamondC).
+	stepC := dag.Op[UIDiamondCInput, UIDiamondCOutput]("c", runUIDiamondC).
 		WithDisplayName("C")
-	stepD := dag.Define[UIDiamondDInput, UIDiamondDOutput]("d", runUIDiamondD).
+	stepD := dag.Op[UIDiamondDInput, UIDiamondDOutput]("d", runUIDiamondD).
 		WithDisplayName("D")
 
 	return dag.NewJob("ui_diamond_join").

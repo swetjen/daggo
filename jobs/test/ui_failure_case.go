@@ -29,11 +29,11 @@ type UIFailureCOutput struct {
 }
 
 func UIFailureCaseJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UIFailureAOutput]("a", runUIFailureA).
+	stepA := dag.Op[dag.NoInput, UIFailureAOutput]("a", runUIFailureA).
 		WithDisplayName("A")
-	stepB := dag.Define[UIFailureBInput, UIFailureBOutput]("b", runUIFailureB).
+	stepB := dag.Op[UIFailureBInput, UIFailureBOutput]("b", runUIFailureB).
 		WithDisplayName("B")
-	stepC := dag.Define[UIFailureCInput, UIFailureCOutput]("c", runUIFailureC).
+	stepC := dag.Op[UIFailureCInput, UIFailureCOutput]("c", runUIFailureC).
 		WithDisplayName("C (fails)")
 
 	return dag.NewJob("ui_failure_case").

@@ -22,10 +22,10 @@ type testExtractOutput struct {
 }
 
 func TestNewAppSyncsRegisteredJobsToDB(t *testing.T) {
-	scrape := dag.Define[dag.NoInput, testScrapeOutput]("scrape", func(_ context.Context, _ dag.NoInput) (testScrapeOutput, error) {
+	scrape := dag.Op[dag.NoInput, testScrapeOutput]("scrape", func(_ context.Context, _ dag.NoInput) (testScrapeOutput, error) {
 		return testScrapeOutput{HTML: "<html><title>DAGGO</title></html>"}, nil
 	})
-	extract := dag.Define[testExtractInput, testExtractOutput]("extract_title", func(_ context.Context, in testExtractInput) (testExtractOutput, error) {
+	extract := dag.Op[testExtractInput, testExtractOutput]("extract_title", func(_ context.Context, in testExtractInput) (testExtractOutput, error) {
 		return testExtractOutput{Title: in.Scrape.HTML}, nil
 	})
 	job := dag.NewJob("content_ingestion").

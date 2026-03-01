@@ -32,7 +32,7 @@ type testTransformInput struct {
 }
 
 func TestBuildSingularInputMissingProvider(t *testing.T) {
-	consumer := Define[testSingularInput, testAltOutput]("consumer", func(_ context.Context, _ testSingularInput) (testAltOutput, error) {
+	consumer := Op[testSingularInput, testAltOutput]("consumer", func(_ context.Context, _ testSingularInput) (testAltOutput, error) {
 		return testAltOutput{}, nil
 	})
 
@@ -46,13 +46,13 @@ func TestBuildSingularInputMissingProvider(t *testing.T) {
 }
 
 func TestBuildSingularInputAmbiguousProvider(t *testing.T) {
-	producerA := Define[NoInput, testOutput]("producer_a", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producerA := Op[NoInput, testOutput]("producer_a", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "a"}, nil
 	})
-	producerB := Define[NoInput, testOutput]("producer_b", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producerB := Op[NoInput, testOutput]("producer_b", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "b"}, nil
 	})
-	consumer := Define[testSingularInput, testAltOutput]("consumer", func(_ context.Context, _ testSingularInput) (testAltOutput, error) {
+	consumer := Op[testSingularInput, testAltOutput]("consumer", func(_ context.Context, _ testSingularInput) (testAltOutput, error) {
 		return testAltOutput{}, nil
 	})
 
@@ -67,7 +67,7 @@ func TestBuildSingularInputAmbiguousProvider(t *testing.T) {
 }
 
 func TestBuildPointerInputOptionalNil(t *testing.T) {
-	consumer := Define[testPointerInput, testAltOutput]("consumer", func(_ context.Context, in testPointerInput) (testAltOutput, error) {
+	consumer := Op[testPointerInput, testAltOutput]("consumer", func(_ context.Context, in testPointerInput) (testAltOutput, error) {
 		if in.Maybe != nil {
 			return testAltOutput{}, ErrContract("expected nil pointer")
 		}
@@ -99,13 +99,13 @@ func TestBuildPointerInputOptionalNil(t *testing.T) {
 }
 
 func TestBuildPointerInputAmbiguousProvider(t *testing.T) {
-	producerA := Define[NoInput, testOutput]("producer_a", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producerA := Op[NoInput, testOutput]("producer_a", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "a"}, nil
 	})
-	producerB := Define[NoInput, testOutput]("producer_b", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producerB := Op[NoInput, testOutput]("producer_b", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "b"}, nil
 	})
-	consumer := Define[testPointerInput, testAltOutput]("consumer", func(_ context.Context, _ testPointerInput) (testAltOutput, error) {
+	consumer := Op[testPointerInput, testAltOutput]("consumer", func(_ context.Context, _ testPointerInput) (testAltOutput, error) {
 		return testAltOutput{}, nil
 	})
 
@@ -119,10 +119,10 @@ func TestBuildPointerInputAmbiguousProvider(t *testing.T) {
 }
 
 func TestBuildPointerInputSingleProvider(t *testing.T) {
-	producer := Define[NoInput, testOutput]("producer", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producer := Op[NoInput, testOutput]("producer", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "single"}, nil
 	})
-	consumer := Define[testPointerInput, testAltOutput]("consumer", func(_ context.Context, in testPointerInput) (testAltOutput, error) {
+	consumer := Op[testPointerInput, testAltOutput]("consumer", func(_ context.Context, in testPointerInput) (testAltOutput, error) {
 		if in.Maybe == nil {
 			return testAltOutput{}, ErrContract("expected non-nil pointer")
 		}
@@ -158,13 +158,13 @@ func TestBuildPointerInputSingleProvider(t *testing.T) {
 }
 
 func TestBuildSliceInputFanInOrderIsTopological(t *testing.T) {
-	producerRoot := Define[NoInput, testOutput]("z_source", func(_ context.Context, _ NoInput) (testOutput, error) {
+	producerRoot := Op[NoInput, testOutput]("z_source", func(_ context.Context, _ NoInput) (testOutput, error) {
 		return testOutput{Name: "z"}, nil
 	})
-	producerDerived := Define[testTransformInput, testOutput]("a_source", func(_ context.Context, in testTransformInput) (testOutput, error) {
+	producerDerived := Op[testTransformInput, testOutput]("a_source", func(_ context.Context, in testTransformInput) (testOutput, error) {
 		return testOutput{Name: in.Prev.Name + "_a"}, nil
 	})
-	merger := Define[testSliceInput, testAltOutput]("merge", func(_ context.Context, in testSliceInput) (testAltOutput, error) {
+	merger := Op[testSliceInput, testAltOutput]("merge", func(_ context.Context, in testSliceInput) (testAltOutput, error) {
 		return testAltOutput{Value: len(in.Sources)}, nil
 	})
 
@@ -205,7 +205,7 @@ func TestBuildSliceInputFanInOrderIsTopological(t *testing.T) {
 }
 
 func TestBuildSliceInputAllowsZeroProviders(t *testing.T) {
-	consumer := Define[testSliceInput, testAltOutput]("consumer", func(_ context.Context, in testSliceInput) (testAltOutput, error) {
+	consumer := Op[testSliceInput, testAltOutput]("consumer", func(_ context.Context, in testSliceInput) (testAltOutput, error) {
 		return testAltOutput{Value: len(in.Sources)}, nil
 	})
 
@@ -235,7 +235,7 @@ func TestBuildSliceInputAllowsZeroProviders(t *testing.T) {
 
 func TestAddScheduleGeneratesImplicitKey(t *testing.T) {
 	job, err := NewJob("implicit_schedule_key").
-		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+		Add(Op[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
 			return testOutput{Name: "ok"}, nil
 		})).
 		AddSchedule(ScheduleDefinition{
@@ -258,7 +258,7 @@ func TestAddScheduleGeneratesImplicitKey(t *testing.T) {
 
 func TestAddScheduleGeneratedKeysAreDeterministicallyDeduped(t *testing.T) {
 	job, err := NewJob("dedupe_schedule_keys").
-		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+		Add(Op[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
 			return testOutput{Name: "ok"}, nil
 		})).
 		AddSchedule(ScheduleDefinition{
@@ -289,7 +289,7 @@ func TestAddScheduleGeneratedKeysAreDeterministicallyDeduped(t *testing.T) {
 
 func TestAddSchedulePreservesExplicitKey(t *testing.T) {
 	job, err := NewJob("explicit_schedule_key").
-		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+		Add(Op[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
 			return testOutput{Name: "ok"}, nil
 		})).
 		AddSchedule(ScheduleDefinition{

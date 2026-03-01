@@ -32,13 +32,13 @@ type UIMultiRootDOutput struct {
 }
 
 func UIMultiRootForestJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UIMultiRootAOutput]("a", runUIMultiRootA).
+	stepA := dag.Op[dag.NoInput, UIMultiRootAOutput]("a", runUIMultiRootA).
 		WithDisplayName("A")
-	stepB := dag.Define[UIMultiRootBInput, UIMultiRootBOutput]("b", runUIMultiRootB).
+	stepB := dag.Op[UIMultiRootBInput, UIMultiRootBOutput]("b", runUIMultiRootB).
 		WithDisplayName("B")
-	stepC := dag.Define[dag.NoInput, UIMultiRootCOutput]("c", runUIMultiRootC).
+	stepC := dag.Op[dag.NoInput, UIMultiRootCOutput]("c", runUIMultiRootC).
 		WithDisplayName("C")
-	stepD := dag.Define[UIMultiRootDInput, UIMultiRootDOutput]("d", runUIMultiRootD).
+	stepD := dag.Op[UIMultiRootDInput, UIMultiRootDOutput]("d", runUIMultiRootD).
 		WithDisplayName("D")
 
 	return dag.NewJob("ui_multi_root_forest").

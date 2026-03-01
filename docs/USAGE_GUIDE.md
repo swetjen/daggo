@@ -4,7 +4,7 @@ This guide covers the package-level runtime flow for importing DAGGO into anothe
 
 ## Package Flow
 
-1. Define typed steps with `dag.Define[I, O]`.
+1. Define typed steps with `dag.Op[I, O]`.
 2. Build a job with `dag.NewJob(...).Add(...).MustBuild()`.
 3. Start from `daggo.DefaultConfig()`.
 4. Launch DAGGO with `daggo.Main(...)`, `daggo.Run(...)`, or build an `app` with `daggo.NewApp(...)`.
@@ -14,6 +14,7 @@ This guide covers the package-level runtime flow for importing DAGGO into anothe
 ```go
 cfg := daggo.DefaultConfig()
 cfg.Admin.Port = "8080"
+cfg.DisableUI = false
 cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 
 if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil {
@@ -32,6 +33,8 @@ if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil
 
 Current schedules are taken from the jobs registered in memory at startup. DAGGO persists scheduler runtime state and run history, not future schedule definitions.
 
+If you do not want the UI exposed, set `cfg.DisableUI = true`. DAGGO will still serve `/rpc/` and `/rpc/docs/`.
+
 ## Recommended Project Layout
 
 For a real imported application, prefer separating graph wiring from operational code:
@@ -43,15 +46,17 @@ myapp/
     content_ingestion.go
     customer_sync.go
   ops/
-    deps.go
     content_ops.go
     customer_ops.go
+  resources/
+    deps.go
 ```
 
 Recommended split:
 
 - `jobs/`: DAGGO job definitions, schedules, and graph composition.
-- `ops/`: concrete step implementations and the dependencies they need.
+- `ops/`: concrete step implementations.
+- `resources/`: shared clients, repositories, and external service handles.
 
 This keeps job definitions declarative and makes dependency handling straightforward.
 
@@ -60,28 +65,51 @@ This keeps job definitions declarative and makes dependency handling straightfor
 Prefer passing dependencies into a struct and exposing step functions as methods on that struct instead of relying on package globals.
 
 ```go
+package resources
+
+import (
+	"log/slog"
+	"net/http"
+
+	"github.com/swetjen/daggo/resources/ollama"
+	playwrightresource "github.com/swetjen/daggo/resources/playwright"
+	"github.com/swetjen/daggo/resources/s3resource"
+)
+
+type Deps struct {
+	Logger *slog.Logger
+	HTTP   *http.Client
+	CRUD   any
+
+	Playwright *playwrightresource.RemoteResource
+	S3         *s3resource.Resource
+	Gemini     *http.Client
+	OpenAPI    *http.Client
+	Ollama     *ollama.Resource
+}
+```
+
+Then mount those dependencies onto an ops struct:
+
+```go
 package ops
 
 import (
 	"context"
-	"log/slog"
-	"net/http"
+
+	"github.com/swetjen/daggo/dag"
+	"myapp/resources"
 )
 
-type Deps struct {
-	HTTP   *http.Client
-	Logger *slog.Logger
+type MyOps struct {
+	deps resources.Deps
 }
 
-type ContentOps struct {
-	deps Deps
+func NewMyOps(deps resources.Deps) *MyOps {
+	return &MyOps{deps: deps}
 }
 
-func NewContentOps(deps Deps) *ContentOps {
-	return &ContentOps{deps: deps}
-}
-
-func (o *ContentOps) ScrapePage(ctx context.Context, in ScrapePageInput) (ScrapePageOutput, error) {
+func (o *MyOps) ScrapePageOp(ctx context.Context, in dag.NoInput) (ScrapePageOutput, error) {
 	_ = ctx
 	_ = in
 	o.deps.Logger.Info("scraping page")
@@ -99,10 +127,10 @@ import (
 	"myapp/ops"
 )
 
-func ContentIngestion(ops *ops.ContentOps) dag.JobDefinition {
-	scrape := dag.Define[ScrapePageInput, ScrapePageOutput]("scrape_page", ops.ScrapePage)
-	extract := dag.Define[ExtractInput, ExtractOutput]("extract", ops.Extract)
-	update := dag.Define[UpdateInput, UpdateOutput]("update", ops.Update)
+func ContentIngestion(myOps *ops.MyOps) dag.JobDefinition {
+	scrape := dag.Op[dag.NoInput, ops.ScrapePageOutput]("scrape_page", myOps.ScrapePageOp)
+	extract := dag.Op[ops.ExtractInput, ops.ExtractOutput]("extract", myOps.ExtractOp)
+	update := dag.Op[ops.UpsertInput, ops.UpsertOutput]("update", myOps.UpsertOp)
 
 	return dag.NewJob("content_ingestion").
 		Add(scrape, extract, update).
@@ -120,6 +148,7 @@ This pattern gives you:
 - explicit dependency injection
 - simpler unit testing for ops
 - cleaner separation between orchestration shape and operational code
+- readable ops that follow a standard Go pattern: input type, output type, named `...Op` function
 
 ## Embedded App Mode
 
@@ -141,6 +170,7 @@ myMux.Handle("/daggo/", http.StripPrefix("/daggo", app.Handler()))
 The public config is centered on `daggo.Config`:
 
 - `Admin.Port`
+- `DisableUI`
 - `Database.Driver`
 - `Database.SQLite.Path`
 - `Database.SQLite.DSN`

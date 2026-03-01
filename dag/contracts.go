@@ -38,25 +38,25 @@ type Node[I any, O any] struct {
 	spec nodeSpec
 }
 
-func Define[I any, O any](key string, fn StepFn[I, O]) Node[I, O] {
+func Op[I any, O any](key string, fn StepFn[I, O]) Node[I, O] {
 	trimmedKey := strings.TrimSpace(key)
 	if trimmedKey == "" {
-		panic("dag.Define: key is required")
+		panic("dag.Op: key is required")
 	}
 	inType := typeOf[I]()
 	outType := typeOf[O]()
 	if inType == nil || inType.Kind() != reflect.Struct {
-		panic("dag.Define: input type must be a struct")
+		panic("dag.Op: input type must be a struct")
 	}
 	if outType == nil || outType.Kind() != reflect.Struct {
-		panic("dag.Define: output type must be a struct")
+		panic("dag.Op: output type must be a struct")
 	}
 	runValue := reflect.ValueOf(fn)
 	if !runValue.IsValid() || runValue.Kind() != reflect.Func {
-		panic("dag.Define: step function is invalid")
+		panic("dag.Op: step function is invalid")
 	}
 	if runValue.IsNil() {
-		panic("dag.Define: step function is nil")
+		panic("dag.Op: step function is nil")
 	}
 
 	return Node[I, O]{

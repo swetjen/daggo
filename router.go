@@ -47,7 +47,9 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 	cfg = cfg.Normalized()
 	mux := http.NewServeMux()
 	mux.Handle("/rpc/", rpcRouter)
-	mux.Handle("/", embedAndServeReact())
+	if !cfg.DisableUI {
+		mux.Handle("/", embedAndServeReact())
+	}
 
 	handler := httpapi.Cors(
 		httpapi.WithAllowedOrigins(cfg.AllowedOrigins...),

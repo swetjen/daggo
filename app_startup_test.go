@@ -33,7 +33,7 @@ func TestConsoleBaseURL(t *testing.T) {
 func TestStartupBannerIncludesConnectionHints(t *testing.T) {
 	t.Parallel()
 
-	banner := startupBanner(":8000")
+	banner := startupBanner(DefaultConfig(), ":8000")
 	for _, snippet := range []string{
 		"[DAGGO]",
 		"UI:       http://localhost:8000/",
@@ -45,5 +45,20 @@ func TestStartupBannerIncludesConnectionHints(t *testing.T) {
 	}
 	if strings.Contains(banner, "RPC base:") {
 		t.Fatalf("startup banner should omit RPC base, got %q", banner)
+	}
+}
+
+func TestStartupBannerOmitsUIWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.DisableUI = true
+
+	banner := startupBanner(cfg, ":8000")
+	if strings.Contains(banner, "UI:") {
+		t.Fatalf("startup banner should omit UI when disabled, got %q", banner)
+	}
+	if !strings.Contains(banner, "RPC docs: http://localhost:8000/rpc/docs") {
+		t.Fatalf("startup banner missing docs hint, got %q", banner)
 	}
 }

@@ -80,10 +80,10 @@ type exParallelJoinOutput struct {
 }
 
 func TestExecutorExecuteRun_HappyPath(t *testing.T) {
-	source := Define[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	source := Op[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 21}, nil
 	})
-	consumer := Define[exConsumerInput, exConsumerOutput]("consumer", func(_ context.Context, in exConsumerInput) (exConsumerOutput, error) {
+	consumer := Op[exConsumerInput, exConsumerOutput]("consumer", func(_ context.Context, in exConsumerInput) (exConsumerOutput, error) {
 		return exConsumerOutput{Doubled: in.Source.Value * 2}, nil
 	})
 	job := NewJob("executor_happy").Add(source, consumer).MustBuild()
@@ -139,13 +139,13 @@ func TestExecutorExecuteRun_HappyPath(t *testing.T) {
 }
 
 func TestExecutorExecuteRun_StepFailureSkipsDownstream(t *testing.T) {
-	source := Define[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	source := Op[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 7}, nil
 	})
-	transform := Define[exTransformInput, exTransformOutput]("transform", func(_ context.Context, _ exTransformInput) (exTransformOutput, error) {
+	transform := Op[exTransformInput, exTransformOutput]("transform", func(_ context.Context, _ exTransformInput) (exTransformOutput, error) {
 		return exTransformOutput{}, fmt.Errorf("transform exploded")
 	})
-	publish := Define[exPublishInput, exPublishOutput]("publish", func(_ context.Context, _ exPublishInput) (exPublishOutput, error) {
+	publish := Op[exPublishInput, exPublishOutput]("publish", func(_ context.Context, _ exPublishInput) (exPublishOutput, error) {
 		return exPublishOutput{Done: true}, nil
 	})
 	job := NewJob("executor_failure").Add(source, transform, publish).MustBuild()
@@ -202,7 +202,7 @@ func TestExecutorExecuteRun_StepFailureSkipsDownstream(t *testing.T) {
 
 func TestExecutorExecuteRun_Resilience(t *testing.T) {
 	t.Run("panic_recovery_marks_run_failed", func(t *testing.T) {
-		panicStep := Define[NoInput, exPanicOutput]("panic_step", func(_ context.Context, _ NoInput) (exPanicOutput, error) {
+		panicStep := Op[NoInput, exPanicOutput]("panic_step", func(_ context.Context, _ NoInput) (exPanicOutput, error) {
 			panic("kaboom")
 		})
 		job := NewJob("executor_panic").Add(panicStep).MustBuild()
@@ -246,7 +246,7 @@ func TestExecutorExecuteRun_Resilience(t *testing.T) {
 	})
 
 	t.Run("output_marshal_error_marks_step_failed", func(t *testing.T) {
-		badJSONStep := Define[NoInput, exMarshalOutput]("emit_bad_json", func(_ context.Context, _ NoInput) (exMarshalOutput, error) {
+		badJSONStep := Op[NoInput, exMarshalOutput]("emit_bad_json", func(_ context.Context, _ NoInput) (exMarshalOutput, error) {
 			return exMarshalOutput{Bad: func() {}}, nil
 		})
 		job := NewJob("executor_marshal_failure").Add(badJSONStep).MustBuild()
@@ -290,10 +290,10 @@ func TestExecutorExecuteRun_Resilience(t *testing.T) {
 	})
 
 	t.Run("hydrate_input_decode_error_marks_run_failed", func(t *testing.T) {
-		provider := Define[NoInput, exHydrateProviderOutput]("provider", func(_ context.Context, _ NoInput) (exHydrateProviderOutput, error) {
+		provider := Op[NoInput, exHydrateProviderOutput]("provider", func(_ context.Context, _ NoInput) (exHydrateProviderOutput, error) {
 			return exHydrateProviderOutput{Value: 1}, nil
 		})
-		consumer := Define[exHydrateConsumerInput, exHydrateConsumerOutput]("consumer", func(_ context.Context, in exHydrateConsumerInput) (exHydrateConsumerOutput, error) {
+		consumer := Op[exHydrateConsumerInput, exHydrateConsumerOutput]("consumer", func(_ context.Context, in exHydrateConsumerInput) (exHydrateConsumerOutput, error) {
 			return exHydrateConsumerOutput{Value: in.Provider.Value + 1}, nil
 		})
 		job := NewJob("executor_hydrate_failure").Add(provider, consumer).MustBuild()
@@ -367,13 +367,13 @@ func TestExecutorExecuteRun_Resilience(t *testing.T) {
 }
 
 func TestExecutorExecuteRun_RerunStepUsesParentOutputs(t *testing.T) {
-	source := Define[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	source := Op[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 2}, nil
 	})
-	transform := Define[exTransformInput, exTransformOutput]("transform", func(_ context.Context, in exTransformInput) (exTransformOutput, error) {
+	transform := Op[exTransformInput, exTransformOutput]("transform", func(_ context.Context, in exTransformInput) (exTransformOutput, error) {
 		return exTransformOutput{Transformed: in.Source.Value + 3}, nil
 	})
-	publish := Define[exPublishInput, exPublishOutput]("publish", func(_ context.Context, _ exPublishInput) (exPublishOutput, error) {
+	publish := Op[exPublishInput, exPublishOutput]("publish", func(_ context.Context, _ exPublishInput) (exPublishOutput, error) {
 		return exPublishOutput{Done: true}, nil
 	})
 	job := NewJob("executor_rerun").Add(source, transform, publish).MustBuild()
@@ -445,7 +445,7 @@ func TestExecutorExecuteRun_RerunStepUsesParentOutputs(t *testing.T) {
 
 func TestExecutorExecuteRun_EventContract(t *testing.T) {
 	t.Run("success_events_have_expected_fields", func(t *testing.T) {
-		step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+		step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 			return exSourceOutput{Value: 1}, nil
 		})
 		job := NewJob("event_contract_success").Add(step).MustBuild()
@@ -511,7 +511,7 @@ func TestExecutorExecuteRun_EventContract(t *testing.T) {
 	})
 
 	t.Run("failure_events_have_expected_fields", func(t *testing.T) {
-		step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+		step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 			return exSourceOutput{}, fmt.Errorf("boom")
 		})
 		job := NewJob("event_contract_failure").Add(step).MustBuild()
@@ -548,7 +548,7 @@ func TestExecutorExecuteRun_EventContract(t *testing.T) {
 }
 
 func TestExecutorExecuteRun_StepContextLoggerWritesRunEvents(t *testing.T) {
-	step := Define[NoInput, exSourceOutput]("op", func(ctx context.Context, _ NoInput) (exSourceOutput, error) {
+	step := Op[NoInput, exSourceOutput]("op", func(ctx context.Context, _ NoInput) (exSourceOutput, error) {
 		LogInfo(ctx, "step emitted log", "component", "unit-test", "count", 1)
 		return exSourceOutput{Value: 3}, nil
 	})
@@ -586,7 +586,7 @@ func TestExecutorExecuteRun_StepContextLoggerWritesRunEvents(t *testing.T) {
 }
 
 func TestExecutorExecuteRun_AutomaticStdIOAndDefaultSlogCapture(t *testing.T) {
-	step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		fmt.Println("stdout log line")
 		fmt.Fprintln(os.Stderr, "stderr log line")
 		slog.Info("default slog line", "component", "unit-test")
@@ -641,7 +641,7 @@ func TestExecutorExecuteRun_ConcurrentReadySteps(t *testing.T) {
 	}
 	t.Cleanup(releaseAll)
 
-	stepA := Define[NoInput, exParallelAOutput]("a", func(ctx context.Context, _ NoInput) (exParallelAOutput, error) {
+	stepA := Op[NoInput, exParallelAOutput]("a", func(ctx context.Context, _ NoInput) (exParallelAOutput, error) {
 		started <- "a"
 		select {
 		case <-ctx.Done():
@@ -650,7 +650,7 @@ func TestExecutorExecuteRun_ConcurrentReadySteps(t *testing.T) {
 		}
 		return exParallelAOutput{Value: 1}, nil
 	})
-	stepB := Define[NoInput, exParallelBOutput]("b", func(ctx context.Context, _ NoInput) (exParallelBOutput, error) {
+	stepB := Op[NoInput, exParallelBOutput]("b", func(ctx context.Context, _ NoInput) (exParallelBOutput, error) {
 		started <- "b"
 		select {
 		case <-ctx.Done():
@@ -659,7 +659,7 @@ func TestExecutorExecuteRun_ConcurrentReadySteps(t *testing.T) {
 		}
 		return exParallelBOutput{Value: 2}, nil
 	})
-	stepJoin := Define[exParallelJoinInput, exParallelJoinOutput]("join", func(_ context.Context, in exParallelJoinInput) (exParallelJoinOutput, error) {
+	stepJoin := Op[exParallelJoinInput, exParallelJoinOutput]("join", func(_ context.Context, in exParallelJoinInput) (exParallelJoinOutput, error) {
 		if in.A.Value != 1 || in.B.Value != 2 {
 			return exParallelJoinOutput{}, fmt.Errorf("unexpected join inputs: %+v", in)
 		}
@@ -738,7 +738,7 @@ func TestExecutorQueue_ConcurrentRuns(t *testing.T) {
 	}
 	t.Cleanup(releaseAll)
 
-	step := Define[NoInput, concurrentRunOutput]("op", func(ctx context.Context, _ NoInput) (concurrentRunOutput, error) {
+	step := Op[NoInput, concurrentRunOutput]("op", func(ctx context.Context, _ NoInput) (concurrentRunOutput, error) {
 		meta, ok := RunMetaFromContext(ctx)
 		if !ok {
 			return concurrentRunOutput{}, fmt.Errorf("missing run meta from context")
@@ -809,7 +809,7 @@ func TestExecutorQueue_ConcurrentRuns(t *testing.T) {
 }
 
 func TestExecutorQueue_SubprocessLaunchFailureMarksRunFailed(t *testing.T) {
-	step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 1}, nil
 	})
 	job := NewJob("executor_subprocess_launch_failure").Add(step).MustBuild()
@@ -852,10 +852,10 @@ func TestExecutorQueue_SubprocessLaunchFailureMarksRunFailed(t *testing.T) {
 }
 
 func TestExecutorMarkRunCanceled_UpdatesRunAndSteps(t *testing.T) {
-	stepA := Define[NoInput, exSourceOutput]("a", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	stepA := Op[NoInput, exSourceOutput]("a", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 1}, nil
 	})
-	stepB := Define[exTransformInput, exTransformOutput]("b", func(_ context.Context, in exTransformInput) (exTransformOutput, error) {
+	stepB := Op[exTransformInput, exTransformOutput]("b", func(_ context.Context, in exTransformInput) (exTransformOutput, error) {
 		return exTransformOutput{Transformed: in.Source.Value + 1}, nil
 	})
 	job := NewJob("executor_mark_canceled").Add(stepA, stepB).MustBuild()
@@ -908,7 +908,7 @@ func TestExecutorMarkRunCanceled_UpdatesRunAndSteps(t *testing.T) {
 }
 
 func TestExecutorTerminateRun_UnknownRunningProcessMarksCanceled(t *testing.T) {
-	step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 1}, nil
 	})
 	job := NewJob("executor_terminate_unknown_running").Add(step).MustBuild()
@@ -941,7 +941,7 @@ func TestExecutorTerminateRun_UnknownRunningProcessMarksCanceled(t *testing.T) {
 }
 
 func TestExecutorExecuteRun_DoesNotRestartCanceledRun(t *testing.T) {
-	step := Define[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+	step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 1}, nil
 	})
 	job := NewJob("executor_no_restart_canceled").Add(step).MustBuild()

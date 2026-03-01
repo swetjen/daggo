@@ -28,7 +28,7 @@ The runs view gives a run-centric history with filtering and drill-in diagnostic
 - Typed DAG authoring with build-time validation.
 - SQLite by default, with automatic startup migrations.
 - Optional PostgreSQL support with automatic schema bootstrap and startup migrations.
-- Embedded web admin UI served by the same Go process.
+- Embedded web admin UI served by the same Go process, with an opt-out switch when you only want RPC/docs.
 - RPC API with generated client support.
 - Background scheduling and async run execution.
 - Internal worker bootstrapping handled by DAGGO, so importing apps do not need to implement private subprocess commands.
@@ -47,17 +47,50 @@ package main
 import (
 	"context"
 	"log"
-	"strings"
 
 	"github.com/swetjen/daggo"
-	"github.com/swetjen/daggo/dag"
+	"myapp/jobs"
+	"myapp/ops"
+	"myapp/resources"
 )
 
-type ScrapePageOutput struct {
-	URL  string
-	HTML string
-}
+func main() {
+	cfg := daggo.DefaultConfig()
+	cfg.Admin.Port = "8080"
+	cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 
+	deps := resources.NewDeps()
+	myOps := ops.NewMyOps(deps)
+
+	if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(jobs.ContentIngestionJob(myOps))); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`jobs.ContentIngestionJob(...)` mounts named ops onto the DAG definition:
+
+```go
+func ContentIngestionJob(myOps *ops.MyOps) dag.JobDefinition {
+	scrapePage := dag.Op[dag.NoInput, ops.ScrapePageOutput]("scrape_page", myOps.ScrapePageOp)
+	extractTitle := dag.Op[ops.ExtractTitleInput, ops.ExtractTitleOutput]("extract_title", myOps.ExtractTitleOp)
+	extractEntities := dag.Op[ops.ExtractEntitiesInput, ops.ExtractEntitiesOutput]("extract_entities", myOps.ExtractEntitiesOp)
+	extractLinks := dag.Op[ops.ExtractLinksInput, ops.ExtractLinksOutput]("extract_links", myOps.ExtractLinksOp)
+	upsertIndex := dag.Op[ops.UpsertIndexInput, ops.UpsertIndexOutput]("upsert_index", myOps.UpsertIndexOp)
+
+	return dag.NewJob("content_ingestion").
+		Add(scrapePage, extractTitle, extractEntities, extractLinks, upsertIndex).
+		MustBuild()
+}
+```
+
+Each op follows a readable Go pattern:
+
+1. Input type
+2. Output type
+3. Named Go function or method ending in `Op`
+
+```go
 type ExtractTitleInput struct {
 	Page ScrapePageOutput
 }
@@ -66,91 +99,16 @@ type ExtractTitleOutput struct {
 	Title string
 }
 
-type ExtractEntitiesInput struct {
-	Page ScrapePageOutput
-}
-
-type ExtractEntitiesOutput struct {
-	Entities []string
-}
-
-type ExtractLinksInput struct {
-	Page ScrapePageOutput
-}
-
-type ExtractLinksOutput struct {
-	Links []string
-}
-
-type UpdateIndexInput struct {
-	Title    ExtractTitleOutput
-	Entities ExtractEntitiesOutput
-	Links    ExtractLinksOutput
-}
-
-type UpdateIndexOutput struct {
-	RecordsUpserted int
-}
-
-func main() {
-	cfg := daggo.DefaultConfig()
-	cfg.Admin.Port = "8080"
-	cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
-
-	if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(buildContentIngestionJob())); err != nil {
-		log.Fatal(err)
+func (o *MyOps) ExtractTitleOp(_ context.Context, in ExtractTitleInput) (ExtractTitleOutput, error) {
+	title := "Untitled"
+	if strings.Contains(in.Page.HTML, "<title>DAGGO</title>") {
+		title = "DAGGO"
 	}
-}
-
-func buildContentIngestionJob() dag.JobDefinition {
-	scrapePage := dag.Define[dag.NoInput, ScrapePageOutput]("scrape_page", func(_ context.Context, _ dag.NoInput) (ScrapePageOutput, error) {
-		return ScrapePageOutput{
-			URL:  "https://example.com/blog/daggo",
-			HTML: "<html><head><title>DAGGO</title></head><body>Daggo extracts entities and links.</body></html>",
-		}, nil
-	})
-
-	extractTitle := dag.Define[ExtractTitleInput, ExtractTitleOutput]("extract_title", func(_ context.Context, in ExtractTitleInput) (ExtractTitleOutput, error) {
-		title := "Untitled"
-		if strings.Contains(in.Page.HTML, "<title>DAGGO</title>") {
-			title = "DAGGO"
-		}
-		return ExtractTitleOutput{Title: title}, nil
-	})
-
-	extractEntities := dag.Define[ExtractEntitiesInput, ExtractEntitiesOutput]("extract_entities", func(_ context.Context, _ ExtractEntitiesInput) (ExtractEntitiesOutput, error) {
-		return ExtractEntitiesOutput{Entities: []string{"Daggo", "SQLite", "Workflow"}}, nil
-	})
-
-	extractLinks := dag.Define[ExtractLinksInput, ExtractLinksOutput]("extract_links", func(_ context.Context, in ExtractLinksInput) (ExtractLinksOutput, error) {
-		return ExtractLinksOutput{Links: []string{in.Page.URL, "https://example.com/docs/daggo"}}, nil
-	})
-
-	updateIndex := dag.Define[UpdateIndexInput, UpdateIndexOutput]("update_search_index", func(_ context.Context, _ UpdateIndexInput) (UpdateIndexOutput, error) {
-		return UpdateIndexOutput{RecordsUpserted: 1}, nil
-	})
-
-	return dag.NewJob("content_ingestion").
-		WithDisplayName("Content Ingestion").
-		WithDescription("Scrape a page, fan out extraction work, then persist a consolidated record.").
-		Add(scrapePage, extractTitle, extractEntities, extractLinks, updateIndex).
-		AddSchedule(dag.ScheduleDefinition{
-			CronExpr: "*/15 * * * *",
-			Timezone: "UTC",
-			Enabled:  true,
-		}).
-		MustBuild()
+	return ExtractTitleOutput{Title: title}, nil
 }
 ```
 
-```text
-scrape_page
-  -> extract_title ----\
-  -> extract_entities --+-> update_search_index
-  -> extract_links ----/
-```
-
-See [examples/content_ingestion/main.go](examples/content_ingestion/main.go) for the full example.
+See [examples/content_ingestion/main.go](examples/content_ingestion/main.go), [examples/content_ingestion/jobs/content_ingestion.go](examples/content_ingestion/jobs/content_ingestion.go), [examples/content_ingestion/ops/content_ops.go](examples/content_ingestion/ops/content_ops.go), and [examples/content_ingestion/resources/deps.go](examples/content_ingestion/resources/deps.go) for the full example.
 
 ## Startup Flow
 
@@ -165,6 +123,8 @@ Calling `daggo.Main(...)` or `daggo.Run(...)` gives new users a working runtime 
 
 Current schedules are derived from the jobs you register at startup. DAGGO does not persist future schedule definitions in the database; it persists scheduler bookkeeping and historical runs.
 
+If you only want the RPC surface, set `cfg.DisableUI = true`. DAGGO will continue serving `/rpc/` and `/rpc/docs/`, while `/` will no longer expose the admin UI.
+
 ## Recommended Project Structure
 
 For importing apps, the cleanest layout is usually:
@@ -176,40 +136,58 @@ myapp/
     content_ingestion.go
     customer_sync.go
   ops/
-    deps.go
     content_ops.go
     customer_ops.go
+  resources/
+    deps.go
 ```
 
 - Put job definitions in `jobs/`.
 - Put concrete operational code in `ops/`.
-- Pass dependencies into an ops struct and bind DAGGO steps to methods on that struct.
+- Put shared clients and app dependencies in `resources/`.
+- Pass `resources.Deps` into an ops struct and bind DAGGO steps to named methods on that struct.
 
 That keeps job wiring declarative while keeping dependency handling explicit and testable.
 
 ```go
-package ops
+package resources
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
+
+	"github.com/swetjen/daggo/resources/ollama"
+	playwrightresource "github.com/swetjen/daggo/resources/playwright"
+	"github.com/swetjen/daggo/resources/s3resource"
 )
 
 type Deps struct {
-	HTTP   *http.Client
 	Logger *slog.Logger
+	HTTP   *http.Client
+	CRUD   any
+
+	Playwright *playwrightresource.RemoteResource
+	S3         *s3resource.Resource
+	Gemini     *http.Client
+	OpenAPI    *http.Client
+	Ollama     *ollama.Resource
+}
+```
+
+Then mount those dependencies onto an ops struct:
+
+```go
+package ops
+
+type MyOps struct {
+	deps resources.Deps
 }
 
-type ContentOps struct {
-	deps Deps
+func NewMyOps(deps resources.Deps) *MyOps {
+	return &MyOps{deps: deps}
 }
 
-func NewContentOps(deps Deps) *ContentOps {
-	return &ContentOps{deps: deps}
-}
-
-func (o *ContentOps) ScrapePage(ctx context.Context, in ScrapePageInput) (ScrapePageOutput, error) {
+func (o *MyOps) ScrapePageOp(ctx context.Context, in dag.NoInput) (ScrapePageOutput, error) {
 	_ = ctx
 	_ = in
 	o.deps.Logger.Info("scraping page")
@@ -217,12 +195,11 @@ func (o *ContentOps) ScrapePage(ctx context.Context, in ScrapePageInput) (Scrape
 }
 ```
 
-Then your job package can focus on graph composition:
+Then your `jobs/` package can focus on graph composition:
 
 ```go
-func ContentIngestionJob(ops *ops.ContentOps) dag.JobDefinition {
-	scrape := dag.Define[ScrapePageInput, ScrapePageOutput]("scrape_page", ops.ScrapePage)
-	// define the rest of the graph here
+func ContentIngestionJob(myOps *ops.MyOps) dag.JobDefinition {
+	scrape := dag.Op[dag.NoInput, ops.ScrapePageOutput]("scrape_page", myOps.ScrapePageOp)
 	return dag.NewJob("content_ingestion").Add(scrape).MustBuild()
 }
 ```
@@ -234,12 +211,14 @@ Start from `daggo.DefaultConfig()` and override what you need:
 ```go
 cfg := daggo.DefaultConfig()
 cfg.Admin.Port = "8080"
+cfg.DisableUI = false
 cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 ```
 
 Available config areas:
 
 - `cfg.Admin.Port`: web admin / RPC listen port.
+- `cfg.DisableUI`: disable the embedded admin UI while keeping RPC/docs enabled.
 - `cfg.Database`: database driver and connection settings.
 - `cfg.Execution`: queue size, execution mode, run concurrency, step concurrency.
 - `cfg.Scheduler`: scheduler enablement and tick controls.

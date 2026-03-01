@@ -50,19 +50,19 @@ type DeployModelOutput struct {
 }
 
 func MLFeatureRefreshJob() dag.JobDefinition {
-	extractFeatures := dag.Define[dag.NoInput, ExtractFeaturesOutput]("extract_features", runExtractFeatures).
+	extractFeatures := dag.Op[dag.NoInput, ExtractFeaturesOutput]("extract_features", runExtractFeatures).
 		WithDisplayName("Extract Features").
 		WithDescription("Fetch and materialize model feature vectors.")
-	longRefreshSleep := dag.Define[LongRefreshSleepInput, LongRefreshSleepOutput]("long_refresh_sleep", runLongRefreshSleep).
+	longRefreshSleep := dag.Op[LongRefreshSleepInput, LongRefreshSleepOutput]("long_refresh_sleep", runLongRefreshSleep).
 		WithDisplayName("Long Refresh Sleep").
 		WithDescription("Intentionally sleep 5-15 minutes to emulate longer-running orchestration work.")
-	trainModel := dag.Define[TrainModelInput, TrainModelOutput]("train_model", runTrainModel).
+	trainModel := dag.Op[TrainModelInput, TrainModelOutput]("train_model", runTrainModel).
 		WithDisplayName("Train Model").
 		WithDescription("Train a fresh model candidate from feature vectors.")
-	evaluateModel := dag.Define[EvaluateModelInput, EvaluateModelOutput]("evaluate_model", runEvaluateModel).
+	evaluateModel := dag.Op[EvaluateModelInput, EvaluateModelOutput]("evaluate_model", runEvaluateModel).
 		WithDisplayName("Evaluate Model").
 		WithDescription("Score model quality against acceptance thresholds.")
-	deployModel := dag.Define[DeployModelInput, DeployModelOutput]("deploy_model", runDeployModel).
+	deployModel := dag.Op[DeployModelInput, DeployModelOutput]("deploy_model", runDeployModel).
 		WithDisplayName("Deploy Model").
 		WithDescription("Promote the accepted model candidate to production.")
 

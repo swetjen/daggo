@@ -40,16 +40,16 @@ type PublishDashboardOutput struct {
 }
 
 func DailyOrdersPipelineJob() dag.JobDefinition {
-	ingestOrders := dag.Define[dag.NoInput, IngestOrdersOutput]("ingest_orders", runIngestOrders).
+	ingestOrders := dag.Op[dag.NoInput, IngestOrdersOutput]("ingest_orders", runIngestOrders).
 		WithDisplayName("Ingest Orders").
 		WithDescription("Pull fresh raw orders from source systems.")
-	cleanOrders := dag.Define[CleanOrdersInput, CleanOrdersOutput]("clean_orders", runCleanOrders).
+	cleanOrders := dag.Op[CleanOrdersInput, CleanOrdersOutput]("clean_orders", runCleanOrders).
 		WithDisplayName("Clean Orders").
 		WithDescription("Normalize and validate the ingested payloads.")
-	aggregateOrders := dag.Define[AggregateOrdersInput, AggregateOrdersOutput]("aggregate_orders", runAggregateOrders).
+	aggregateOrders := dag.Op[AggregateOrdersInput, AggregateOrdersOutput]("aggregate_orders", runAggregateOrders).
 		WithDisplayName("Aggregate Orders").
 		WithDescription("Compute daily aggregates for analytics.")
-	publishDashboard := dag.Define[PublishDashboardInput, PublishDashboardOutput]("publish_dashboard", runPublishDashboard).
+	publishDashboard := dag.Op[PublishDashboardInput, PublishDashboardOutput]("publish_dashboard", runPublishDashboard).
 		WithDisplayName("Publish Dashboard").
 		WithDescription("Publish fresh aggregate metrics to the dashboard cache.")
 

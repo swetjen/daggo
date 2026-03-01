@@ -14,6 +14,9 @@ func TestDefaultConfigUsesSQLite(t *testing.T) {
 	if got := cfg.Database.SQLiteDSN(); got != "file:daggo.sqlite?cache=shared&mode=rwc" {
 		t.Fatalf("unexpected sqlite dsn %q", got)
 	}
+	if cfg.DisableUI {
+		t.Fatalf("expected UI to be enabled by default")
+	}
 }
 
 func TestPostgresConfigValidationRequiresConnectionFields(t *testing.T) {
@@ -38,5 +41,15 @@ func TestLoadDoesNotEnablePostgresWithoutExplicitDriver(t *testing.T) {
 
 	if cfg.Database.Driver != DatabaseDriverSQLite {
 		t.Fatalf("expected sqlite driver by default, got %q", cfg.Database.Driver)
+	}
+}
+
+func TestLoadCanDisableUI(t *testing.T) {
+	t.Setenv("DAGGO_DISABLE_UI", "true")
+
+	cfg := Load()
+
+	if !cfg.DisableUI {
+		t.Fatalf("expected UI to be disabled from env")
 	}
 }

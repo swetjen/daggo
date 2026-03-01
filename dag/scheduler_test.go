@@ -46,7 +46,7 @@ func TestSchedulerRunTick_EnqueuesDueRunAndPersistsState(t *testing.T) {
 
 	job := NewJob("scheduler_due").
 		Add(
-			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 				return schedulerSourceOutput{Value: 1}, nil
 			}),
 		).
@@ -131,7 +131,7 @@ func TestSchedulerRunTick_UsesGeneratedScheduleKey(t *testing.T) {
 
 	job := NewJob("scheduler_generated_key").
 		Add(
-			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 				return schedulerSourceOutput{Value: 1}, nil
 			}),
 		).
@@ -185,7 +185,7 @@ func TestSchedulerRunTick_DedupesScheduledMoment(t *testing.T) {
 
 	job := NewJob("scheduler_dedupe").
 		Add(
-			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 				return schedulerSourceOutput{Value: 1}, nil
 			}),
 		).
@@ -261,7 +261,7 @@ func TestSchedulerRunTick_PrunesRemovedSchedulesButPreservesRuns(t *testing.T) {
 		_ = pool.Close()
 	})
 
-	source := Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+	source := Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 		return schedulerSourceOutput{Value: 1}, nil
 	})
 
@@ -373,7 +373,7 @@ func TestSchedulerRunTick_DoesNotBackfillBurst(t *testing.T) {
 
 	job := NewJob("scheduler_non_backfill").
 		Add(
-			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 				return schedulerSourceOutput{Value: 1}, nil
 			}),
 		).
@@ -443,7 +443,7 @@ func TestSchedulerRunTick_SkipsRunCreationWhenDeployDrainActive(t *testing.T) {
 
 	job := NewJob("scheduler_deploy_drain").
 		Add(
-			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
 				return schedulerSourceOutput{Value: 1}, nil
 			}),
 		).

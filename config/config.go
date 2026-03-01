@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Admin          AdminConfig
+	DisableUI      bool
 	AllowedOrigins []string
 	Database       DatabaseConfig
 	Execution      ExecutionConfig
@@ -111,6 +112,7 @@ func Load() Config {
 
 	cfg := Default()
 	cfg.Admin.Port = getEnvAny([]string{"DAGGO_ADMIN_PORT", "PORT"}, cfg.Admin.Port)
+	cfg.DisableUI = getEnvBoolAny([]string{"DAGGO_DISABLE_UI"}, cfg.DisableUI)
 	cfg.AllowedOrigins = splitEnvListAny([]string{"DAGGO_ALLOWED_ORIGINS", "CORS_ALLOW_ORIGINS"}, cfg.AllowedOrigins)
 
 	sqlitePath := getEnvAny([]string{"DAGGO_SQLITE_PATH"}, "")
@@ -162,6 +164,7 @@ func (c Config) Normalized() Config {
 
 	out := defaults
 	out.Admin.Port = normalizePort(firstNonEmpty(c.Admin.Port, defaults.Admin.Port))
+	out.DisableUI = c.DisableUI
 
 	if cleaned := cleanList(c.AllowedOrigins); len(cleaned) > 0 {
 		out.AllowedOrigins = cleaned

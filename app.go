@@ -181,7 +181,7 @@ func (a *App) ListenAndServe() error {
 	if a == nil || a.server == nil {
 		return fmt.Errorf("server is nil")
 	}
-	fmt.Print(startupBanner(a.server.Addr))
+	fmt.Print(startupBanner(a.cfg, a.server.Addr))
 	err := a.server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -355,8 +355,14 @@ func shutdownServer(server *http.Server, cancel context.CancelFunc) {
 	}
 }
 
-func startupBanner(addr string) string {
+func startupBanner(cfg config.Config, addr string) string {
 	baseURL := consoleBaseURL(addr)
+	if cfg.Normalized().DisableUI {
+		return fmt.Sprintf(
+			"\n[DAGGO]\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
+			baseURL,
+		)
+	}
 	return fmt.Sprintf(
 		"\n[DAGGO]\nUI:       %s/\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
 		baseURL,

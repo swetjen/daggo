@@ -4,7 +4,7 @@ This document maps Dagster concepts to DAGGO and highlights where behavior is in
 
 ## Concept Mapping
 
-- Dagster `op` / `solid` -> DAGGO `step` (`dag.Define[I, O]`)
+- Dagster `op` / `solid` -> DAGGO `step` (`dag.Op[I, O]`)
 - Dagster `job` -> DAGGO `job` (`dag.NewJob(...).MustBuild()`)
 - Dagster schedule -> DAGGO `ScheduleDefinition` with cron + timezone
 - Dagster run -> DAGGO run record with step/event history

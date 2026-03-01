@@ -28,11 +28,11 @@ type UITransitiveCOutput struct {
 }
 
 func UITransitiveReductionJob() dag.JobDefinition {
-	stepA := dag.Define[dag.NoInput, UITransitiveAOutput]("a", runUITransitiveA).
+	stepA := dag.Op[dag.NoInput, UITransitiveAOutput]("a", runUITransitiveA).
 		WithDisplayName("A")
-	stepB := dag.Define[UITransitiveBInput, UITransitiveBOutput]("b", runUITransitiveB).
+	stepB := dag.Op[UITransitiveBInput, UITransitiveBOutput]("b", runUITransitiveB).
 		WithDisplayName("B")
-	stepC := dag.Define[UITransitiveCInput, UITransitiveCOutput]("c", runUITransitiveC).
+	stepC := dag.Op[UITransitiveCInput, UITransitiveCOutput]("c", runUITransitiveC).
 		WithDisplayName("C")
 
 	return dag.NewJob("ui_transitive_reduction").
