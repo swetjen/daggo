@@ -358,8 +358,7 @@ func shutdownServer(server *http.Server, cancel context.CancelFunc) {
 func startupBanner(addr string) string {
 	baseURL := consoleBaseURL(addr)
 	return fmt.Sprintf(
-		"\n[DAGGO]\nUI:       %s/\nRPC docs: %s/rpc/docs\nRPC base: %s/rpc\nPress Ctrl+C to stop.\n\n",
-		baseURL,
+		"\n[DAGGO]\nUI:       %s/\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
 		baseURL,
 		baseURL,
 	)

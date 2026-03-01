@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-03-01
+- Reduced the runtime RPC surface to docs and OpenAPI only; the app no longer serves live JS/TS/Python generated client routes.
+- Removed the `RPC base` startup banner line and kept the console output focused on the admin UI and RPC docs.
 - Shipped built frontend assets with the module so imported DAGGO apps load the admin UI without requiring local frontend builds.
 - Fixed file-backed SQLite startup for fresh projects by creating parent directories before applying migrations.
 - Added startup console connection hints for the admin UI and RPC docs.

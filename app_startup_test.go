@@ -38,10 +38,12 @@ func TestStartupBannerIncludesConnectionHints(t *testing.T) {
 		"[DAGGO]",
 		"UI:       http://localhost:8000/",
 		"RPC docs: http://localhost:8000/rpc/docs",
-		"RPC base: http://localhost:8000/rpc",
 	} {
 		if !strings.Contains(banner, snippet) {
 			t.Fatalf("startup banner missing %q in %q", snippet, banner)
 		}
+	}
+	if strings.Contains(banner, "RPC base:") {
+		t.Fatalf("startup banner should omit RPC base, got %q", banner)
 	}
 }

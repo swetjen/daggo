@@ -94,7 +94,7 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 
 	router.HandleRPC(handlerSet.Schedules.SchedulesGetMany)
 
-	router.ServeAllDocs()
+	router.ServeDocs()
 	slog.Info("daggo: router ready", "status", "all clear")
 	return router, application, nil
 }
