@@ -26,9 +26,8 @@ The runs view gives a run-centric history with filtering and drill-in diagnostic
 ## What You Get
 
 - Typed DAG authoring with build-time validation.
-- SQLite by default. Postgres supported.
-- Optional PostgreSQL support with automatic schema bootstrap and startup migrations.
-- Embedded web admin UI served by the same Go process, with an opt-out switch when you only want RPC/docs.
+- Sqlite by default with Postgres also supported.
+- Embedded web admin UI served by the same Go process.
 - RPC API with generated client support.
 - Background scheduling and async run execution.
 - Internal worker bootstrapping handled by DAGGO, so importing apps do not need to implement private subprocess commands.
@@ -89,7 +88,7 @@ Each op follows a standard Go function shape:
 
 1. Input type
 2. Output type
-3. Named Go function or method ending in `Op`
+3. Named Go function or method
 
 ```go
 type AnalyzeTextInput struct {
