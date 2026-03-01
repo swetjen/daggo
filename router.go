@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/swetjen/daggo/config"
 	"github.com/swetjen/daggo/dag"
 	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/daggo/handlers"
+	"github.com/swetjen/daggo/middleware"
 	"github.com/swetjen/virtuous/httpapi"
 	"github.com/swetjen/virtuous/rpc"
 )
@@ -46,7 +48,7 @@ func NewRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, querie
 func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 	cfg = cfg.Normalized()
 	mux := http.NewServeMux()
-	mux.Handle("/rpc/", rpcRouter)
+	mux.Handle("/rpc/", guardRPCHandler(cfg, rpcRouter))
 	if !cfg.DisableUI {
 		mux.Handle("/", embedAndServeReact())
 	}
@@ -55,6 +57,14 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 		httpapi.WithAllowedOrigins(cfg.AllowedOrigins...),
 	)(mux)
 	return handler
+}
+
+func guardRPCHandler(cfg config.Config, next http.Handler) http.Handler {
+	cfg = cfg.Normalized()
+	if strings.TrimSpace(cfg.Admin.SecretKey) == "" {
+		return next
+	}
+	return middleware.AdminBearerGuard{Token: cfg.Admin.SecretKey}.Middleware()(next)
 }
 
 func BuildRouter(cfg config.Config, queries db.Store, pool *sql.DB) (*rpc.Router, error) {
@@ -82,21 +92,38 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 		return nil, nil, err
 	}
 	handlerSet := handlers.New(application)
+	routeGuard := rpcRouteGuard(cfg)
 
 	router := rpc.NewRouter(rpc.WithPrefix("/rpc"))
-	router.HandleRPC(handlerSet.Jobs.JobsGetMany)
-	router.HandleRPC(handlerSet.Jobs.JobByKey)
+	handleRPC(router, handlerSet.Jobs.JobsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Jobs.JobByKey, routeGuard)
 
-	router.HandleRPC(handlerSet.Runs.RunCreate)
-	router.HandleRPC(handlerSet.Runs.RunRerunStepCreate)
-	router.HandleRPC(handlerSet.Runs.RunsGetMany)
-	router.HandleRPC(handlerSet.Runs.RunByID)
-	router.HandleRPC(handlerSet.Runs.RunEventsGetMany)
-	router.HandleRPC(handlerSet.Runs.RunTerminate)
+	handleRPC(router, handlerSet.Runs.RunCreate, routeGuard)
+	handleRPC(router, handlerSet.Runs.RunRerunStepCreate, routeGuard)
+	handleRPC(router, handlerSet.Runs.RunsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Runs.RunByID, routeGuard)
+	handleRPC(router, handlerSet.Runs.RunEventsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Runs.RunTerminate, routeGuard)
 
-	router.HandleRPC(handlerSet.Schedules.SchedulesGetMany)
+	handleRPC(router, handlerSet.Schedules.SchedulesGetMany, routeGuard)
 
 	router.ServeDocs()
 	slog.Info("daggo: router ready", "status", "all clear")
 	return router, application, nil
+}
+
+func rpcRouteGuard(cfg config.Config) *middleware.AdminBearerGuard {
+	cfg = cfg.Normalized()
+	if cfg.Admin.SecretKey == "" {
+		return nil
+	}
+	return &middleware.AdminBearerGuard{Token: cfg.Admin.SecretKey}
+}
+
+func handleRPC(router *rpc.Router, handler any, guard *middleware.AdminBearerGuard) {
+	if guard == nil {
+		router.HandleRPC(handler)
+		return
+	}
+	router.HandleRPC(handler, *guard)
 }

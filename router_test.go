@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/swetjen/daggo"
@@ -58,6 +59,39 @@ func TestGeneratedOutputs(t *testing.T) {
 	}
 	if _, ok := doc["paths"]; !ok {
 		t.Fatalf("openapi missing paths field")
+	}
+}
+
+func TestGeneratedClientsIncludeBearerAuthWhenGuarded(t *testing.T) {
+	cfg := config.Load()
+	cfg.Admin.SecretKey = "sdk-generation-placeholder"
+
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	router, err := daggo.BuildRouter(cfg, queries, pool)
+	if err != nil {
+		t.Fatalf("build router: %v", err)
+	}
+
+	outDir := t.TempDir()
+	clientTSPath := filepath.Join(outDir, "client.gen.ts")
+	if err := router.WriteClientTSFile(clientTSPath); err != nil {
+		t.Fatalf("client ts: %v", err)
+	}
+
+	data, err := os.ReadFile(clientTSPath)
+	if err != nil {
+		t.Fatalf("read client ts: %v", err)
+	}
+	source := string(data)
+	if !strings.Contains(source, `headers["Authorization"] = "Bearer " + authValue`) {
+		t.Fatalf("expected generated client to include bearer auth header, got %q", source)
 	}
 }
 

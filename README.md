@@ -63,7 +63,7 @@ func main() {
 	myOps := ops.NewMyOps(deps)
 	myJobs := jobs.ContentIngestionJob(myOps)
 
-	if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(myJobs)); err != nil {
+	if err := daggo.Run(context.Background(), cfg, myJobs); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -105,7 +105,7 @@ func (o *MyOps) ExtractTitleOp(ctx context.Context, in ExtractTitleInput) (Extra
 		return ExtractTitleOutput{}, err
 	}
 	title := "Untitled"
-	if strings.Contains(in.Page.HTML, "<title>DAGGO</title>") {
+	if strings.Contains(in.Page.Body, "<title>DAGGO</title>") {
 		title = "DAGGO"
 	}
 	return ExtractTitleOutput{Title: title}, nil
@@ -116,7 +116,7 @@ See [examples/content_ingestion/main.go](examples/content_ingestion/main.go), [e
 
 ## Startup Flow
 
-Calling `daggo.Main(...)` or `daggo.Run(...)` gives new users a working runtime immediately:
+Calling `daggo.Run(...)` gives new users a working runtime immediately:
 
 1. Opens the configured database.
 2. Applies bundled migrations automatically.
@@ -128,6 +128,20 @@ Calling `daggo.Main(...)` or `daggo.Run(...)` gives new users a working runtime 
 Current schedules are derived from the jobs you register at startup. DAGGO does not persist future schedule definitions in the database; it persists scheduler bookkeeping and historical runs.
 
 If you only want the RPC surface, set `cfg.DisableUI = true`. DAGGO will continue serving `/rpc/` and `/rpc/docs/`, while `/` will no longer expose the admin UI.
+
+## Runner Model
+
+By default, DAGGO executes runs in `subprocess` mode. When a run starts, DAGGO launches a separate worker PID from the same application binary and that worker owns the run lifecycle.
+
+Relevant execution settings:
+
+- `cfg.Execution.Mode`
+- `cfg.Execution.MaxConcurrentRuns`
+- `cfg.Execution.MaxConcurrentSteps`
+
+Because the active run lives in a separate worker process, the web server can restart or roll forward independently without tying run execution to a request-serving goroutine. DAGGO is also designed for deploy-drain coordination so new web code can come up without immediately breaking active workers. We plan to add additional daemon and runner configurations later.
+
+If you want to mount DAGGO into a larger server instead of letting it own the listener, use `daggo.Open(...)` and attach `app.Handler()` wherever you need it.
 
 ## Recommended Project Structure
 
@@ -246,6 +260,7 @@ Start from `daggo.DefaultConfig()` and override what you need:
 ```go
 cfg := daggo.DefaultConfig()
 cfg.Admin.Port = "8080"
+cfg.Admin.SecretKey = "replace-me"
 cfg.DisableUI = false
 cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
 ```
@@ -253,6 +268,7 @@ cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
 Available config areas:
 
 - `cfg.Admin.Port`: web admin / RPC listen port.
+- `cfg.Admin.SecretKey`: optional bearer secret for `/rpc/` and `/rpc/docs/`.
 - `cfg.DisableUI`: disable the embedded admin UI while keeping RPC/docs enabled.
 - `cfg.Database`: database driver and connection settings.
 - `cfg.Execution`: queue size, execution mode, run concurrency, step concurrency.
@@ -293,6 +309,27 @@ At startup, DAGGO will:
 5. use PostgreSQL for jobs, runs, scheduler state, and events
 
 The PostgreSQL runtime details and remaining limitations are documented in [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md).
+
+### RPC Guard
+
+If you want to lock down the DAGGO control plane, configure a secret key:
+
+```go
+cfg := daggo.DefaultConfig()
+cfg.Admin.SecretKey = "replace-me"
+cfg.DisableUI = true
+```
+
+With a secret configured, DAGGO requires `Authorization: Bearer <secret>` on `/rpc/` and `/rpc/docs/`.
+
+Generated clients pass the same value through their auth option:
+
+```ts
+const client = createClient("http://localhost:8000")
+await client.jobs.JobsGetMany({ limit: 50, offset: 0 }, { auth: "replace-me" })
+```
+
+The embedded UI is not authenticated yet. For locked-down deployments today, run DAGGO with `cfg.DisableUI = true`.
 
 ### Schedules
 

@@ -9,6 +9,7 @@ import (
 
 func main() {
 	cfg := api.DefaultConfig()
+	cfg.Admin.SecretKey = "sdk-generation-placeholder"
 	queries, pool, err := db.NewTest()
 	if err != nil {
 		log.Fatal(err)

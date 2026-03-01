@@ -17,6 +17,9 @@ func TestDefaultConfigUsesSQLite(t *testing.T) {
 	if cfg.DisableUI {
 		t.Fatalf("expected UI to be enabled by default")
 	}
+	if cfg.Admin.SecretKey != "" {
+		t.Fatalf("expected admin secret to be empty by default")
+	}
 }
 
 func TestPostgresConfigValidationRequiresConnectionFields(t *testing.T) {
@@ -51,5 +54,15 @@ func TestLoadCanDisableUI(t *testing.T) {
 
 	if !cfg.DisableUI {
 		t.Fatalf("expected UI to be disabled from env")
+	}
+}
+
+func TestLoadCanSetAdminSecretKey(t *testing.T) {
+	t.Setenv("DAGGO_ADMIN_SECRET_KEY", "test-secret")
+
+	cfg := Load()
+
+	if cfg.Admin.SecretKey != "test-secret" {
+		t.Fatalf("expected admin secret key from env, got %q", cfg.Admin.SecretKey)
 	}
 }

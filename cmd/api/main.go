@@ -13,7 +13,7 @@ func main() {
 		os.Args[1] = "daggo-worker"
 	}
 	cfg := daggo.LoadConfigFromEnv()
-	if err := daggo.Main(context.Background(), cfg); err != nil {
+	if err := daggo.Run(context.Background(), cfg); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -23,5 +23,8 @@ Primary index for byodb agents. Start here.
 - Never edit `frontend-web/api/client.gen.js` by hand (generated).
 - Do not modify files under `frontend-web/api/` manually (generated).
 - Use the generated JS client in the frontend whenever possible.
+- Prefer one canonical public API for each user workflow. Do not add parallel entrypoints, synonyms, or alias APIs that do the same thing under different names.
+- DAGGO is pre-1.0. When replacing a public API, remove the old path instead of keeping backward-compatibility aliases.
+- When a public API changes, update tests, examples, README snippets, and docs so they only show the canonical path.
 - Before release, run `make gen-all`.
 - Before release, validate the README startup snippet in a fresh throwaway Go module or equivalent clean environment, including loading the admin UI and its built module assets.

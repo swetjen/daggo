@@ -7,22 +7,23 @@ This guide covers the package-level runtime flow for importing DAGGO into anothe
 1. Define typed steps with `dag.Op[I, O]`.
 2. Build a job with `dag.NewJob(...).Add(...).MustBuild()`.
 3. Start from `daggo.DefaultConfig()`.
-4. Launch DAGGO with `daggo.Main(...)`, `daggo.Run(...)`, or build an `app` with `daggo.NewApp(...)`.
+4. Launch DAGGO with `daggo.Run(...)` or open it with `daggo.Open(...)`.
 
 ## Minimal Startup
 
 ```go
 cfg := daggo.DefaultConfig()
 cfg.Admin.Port = "8080"
+cfg.Admin.SecretKey = "replace-me"
 cfg.DisableUI = false
 cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
 
-if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil {
+if err := daggo.Run(context.Background(), cfg, job); err != nil {
 	log.Fatal(err)
 }
 ```
 
-`daggo.Main(...)` automatically:
+`daggo.Run(...)` automatically:
 
 - opens the configured database
 - applies bundled migrations automatically
@@ -34,6 +35,18 @@ if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil
 Current schedules are taken from the jobs registered in memory at startup. DAGGO persists scheduler runtime state and run history, not future schedule definitions.
 
 If you do not want the UI exposed, set `cfg.DisableUI = true`. DAGGO will still serve `/rpc/` and `/rpc/docs/`.
+
+## Runner Model
+
+By default, DAGGO runs each job execution in `subprocess` mode. When a run starts, DAGGO launches a separate worker PID from the same binary and that worker owns the run lifecycle.
+
+Relevant execution settings:
+
+- `cfg.Execution.Mode`
+- `cfg.Execution.MaxConcurrentRuns`
+- `cfg.Execution.MaxConcurrentSteps`
+
+Because runs execute in a separate worker process, the web server can restart independently of the active runner instead of tying run execution to a request-serving goroutine. DAGGO’s deploy-drain support is intended to let new code roll out without immediately disrupting active workers. Additional daemon and runner configurations are planned.
 
 ## Recommended Project Layout
 
@@ -183,10 +196,10 @@ This pattern gives you:
 
 ## Embedded App Mode
 
-If you want to mount DAGGO inside a larger HTTP server, create an app directly:
+If you want to mount DAGGO inside a larger HTTP server, open an app directly:
 
 ```go
-app, err := daggo.NewApp(context.Background(), cfg, daggo.WithJobs(job))
+app, err := daggo.Open(context.Background(), cfg, job)
 if err != nil {
 	log.Fatal(err)
 }
@@ -201,6 +214,7 @@ myMux.Handle("/daggo/", http.StripPrefix("/daggo", app.Handler()))
 The public config is centered on `daggo.Config`:
 
 - `Admin.Port`
+- `Admin.SecretKey`
 - `DisableUI`
 - `Database.Driver`
 - `Database.SQLite.Path`
@@ -261,6 +275,27 @@ export DAGGO_POSTGRES_SSLMODE=require
 ```
 
 More detail lives in [docs/POSTGRES_RUNTIME_SPEC.md](POSTGRES_RUNTIME_SPEC.md).
+
+## RPC Route Guard
+
+If you want to protect DAGGO’s RPC surface, configure a bearer secret:
+
+```go
+cfg := daggo.DefaultConfig()
+cfg.Admin.SecretKey = "replace-me"
+cfg.DisableUI = true
+```
+
+When set, DAGGO requires `Authorization: Bearer <secret>` for `/rpc/` and `/rpc/docs/`.
+
+Generated clients pass the same value through their auth option:
+
+```ts
+const client = createClient("http://localhost:8000")
+await client.jobs.JobsGetMany({ limit: 50, offset: 0 }, { auth: "replace-me" })
+```
+
+The embedded UI is not authenticated yet, so `cfg.DisableUI = true` is the secure deployment mode today.
 
 ## Input Resolution
 

@@ -25,13 +25,6 @@ const (
 	internalWorkerCommand = "daggo-worker"
 )
 
-type Option func(*appOptions) error
-
-type appOptions struct {
-	registry *dag.Registry
-	jobs     []dag.JobDefinition
-}
-
 type App struct {
 	cfg      config.Config
 	runtime  context.Context
@@ -47,32 +40,25 @@ type App struct {
 	closeErr  error
 }
 
-func WithJobs(jobs ...dag.JobDefinition) Option {
-	return func(options *appOptions) error {
-		options.jobs = append(options.jobs, jobs...)
-		return nil
-	}
-}
-
-func WithRegistry(registry *dag.Registry) Option {
-	return func(options *appOptions) error {
-		options.registry = registry
-		return nil
-	}
-}
-
-func Run(ctx context.Context, cfg Config, options ...Option) error {
-	return Main(ctx, cfg, options...)
-}
-
-func Main(ctx context.Context, cfg Config, options ...Option) error {
-	cfg = cfg.Normalized()
-	if err := cfg.Validate(); err != nil {
+func Run(ctx context.Context, cfg Config, jobs ...dag.JobDefinition) error {
+	registry, err := registryFromJobs(jobs...)
+	if err != nil {
 		return err
 	}
+	return runWithRegistry(ctx, cfg, registry)
+}
 
-	registry, err := resolveRegistry(options...)
+func RunRegistry(ctx context.Context, cfg Config, registry *dag.Registry) error {
+	cloned, err := cloneRegistry(registry)
 	if err != nil {
+		return err
+	}
+	return runWithRegistry(ctx, cfg, cloned)
+}
+
+func runWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) error {
+	cfg = cfg.Normalized()
+	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
@@ -84,7 +70,7 @@ func Main(ctx context.Context, cfg Config, options ...Option) error {
 		return runWorker(ctx, cfg, registry, runID)
 	}
 
-	app, err := NewApp(ctx, cfg, options...)
+	app, err := openWithRegistry(ctx, cfg, registry)
 	if err != nil {
 		return err
 	}
@@ -96,18 +82,29 @@ func Main(ctx context.Context, cfg Config, options ...Option) error {
 	return app.ListenAndServe()
 }
 
-func NewApp(ctx context.Context, cfg Config, options ...Option) (*App, error) {
+func Open(ctx context.Context, cfg Config, jobs ...dag.JobDefinition) (*App, error) {
+	registry, err := registryFromJobs(jobs...)
+	if err != nil {
+		return nil, err
+	}
+	return openWithRegistry(ctx, cfg, registry)
+}
+
+func OpenRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (*App, error) {
+	cloned, err := cloneRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	return openWithRegistry(ctx, cfg, cloned)
+}
+
+func openWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (*App, error) {
 	cfg = cfg.Normalized()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	registry, err := resolveRegistry(options...)
-	if err != nil {
-		return nil, err
 	}
 
 	runtimeCtx, cancel := context.WithCancel(ctx)
@@ -233,26 +230,22 @@ func (a *App) Close() error {
 	return a.closeErr
 }
 
-func resolveRegistry(options ...Option) (*dag.Registry, error) {
-	var resolved appOptions
-	for _, option := range options {
-		if option == nil {
-			continue
-		}
-		if err := option(&resolved); err != nil {
+func registryFromJobs(jobs ...dag.JobDefinition) (*dag.Registry, error) {
+	registry := dag.NewRegistry()
+	for _, job := range jobs {
+		if err := registry.Register(job); err != nil {
 			return nil, err
 		}
 	}
+	return registry, nil
+}
 
+func cloneRegistry(source *dag.Registry) (*dag.Registry, error) {
 	registry := dag.NewRegistry()
-	if resolved.registry != nil {
-		for _, job := range resolved.registry.Jobs() {
-			if err := registry.Register(job); err != nil {
-				return nil, err
-			}
-		}
+	if source == nil {
+		return registry, nil
 	}
-	for _, job := range resolved.jobs {
+	for _, job := range source.Jobs() {
 		if err := registry.Register(job); err != nil {
 			return nil, err
 		}

@@ -79,4 +79,4 @@ DAGGO is intended to be imported into your own Go application:
 
 - define jobs in your application code
 - configure DAGGO through `daggo.Config`
-- start the runtime with `daggo.Main(...)` or `daggo.NewApp(...)`
+- start the runtime with `daggo.Run(...)` or mount it with `daggo.Open(...)`
