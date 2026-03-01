@@ -16,11 +16,8 @@ var frontendAssets embed.FS
 func embedAndServeReact() http.Handler {
 	webSub, err := fs.Sub(frontendAssets, "frontend-web/dist")
 	if err != nil || !hasEmbeddedFile(webSub, "index.html") {
-		webSub, err = fs.Sub(frontendAssets, "frontend-web/src")
-	}
-	if err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "frontend assets missing: run make gen-web", http.StatusInternalServerError)
+			http.Error(w, "frontend assets missing from module: install a release that includes frontend-web/dist or run make gen-web before packaging", http.StatusInternalServerError)
 		})
 	}
 	assetSub, assetErr := fs.Sub(frontendAssets, "frontend-web/src/assets")

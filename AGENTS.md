@@ -24,4 +24,4 @@ Primary index for byodb agents. Start here.
 - Do not modify files under `frontend-web/api/` manually (generated).
 - Use the generated JS client in the frontend whenever possible.
 - Before release, run `make gen-all`.
-- Before release, validate the README startup snippet in a fresh throwaway Go module or equivalent clean environment.
+- Before release, validate the README startup snippet in a fresh throwaway Go module or equivalent clean environment, including loading the admin UI and its built module assets.

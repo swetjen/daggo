@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -180,7 +181,7 @@ func (a *App) ListenAndServe() error {
 	if a == nil || a.server == nil {
 		return fmt.Errorf("server is nil")
 	}
-	fmt.Println("DAGGO server listening on " + a.server.Addr)
+	fmt.Print(startupBanner(a.server.Addr))
 	err := a.server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -352,4 +353,34 @@ func shutdownServer(server *http.Server, cancel context.CancelFunc) {
 		log.Printf("daggo: graceful shutdown failed: %v", err)
 		_ = server.Close()
 	}
+}
+
+func startupBanner(addr string) string {
+	baseURL := consoleBaseURL(addr)
+	return fmt.Sprintf(
+		"\n[DAGGO]\nUI:       %s/\nRPC docs: %s/rpc/docs\nRPC base: %s/rpc\nPress Ctrl+C to stop.\n\n",
+		baseURL,
+		baseURL,
+		baseURL,
+	)
+}
+
+func consoleBaseURL(addr string) string {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return "http://localhost:8000"
+	}
+	if strings.HasPrefix(trimmed, ":") {
+		return "http://localhost" + trimmed
+	}
+
+	host, port, err := net.SplitHostPort(trimmed)
+	if err == nil {
+		host = strings.Trim(host, "[]")
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "localhost"
+		}
+		return "http://" + net.JoinHostPort(host, port)
+	}
+	return "http://" + trimmed
 }
