@@ -1,11 +1,5 @@
-CREATE TABLE scheduler_heartbeats (
-    scheduler_key TEXT PRIMARY KEY,
-    last_heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_tick_started_at TEXT NOT NULL DEFAULT '',
-    last_tick_completed_at TEXT NOT NULL DEFAULT '',
-    last_error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+DROP TABLE IF EXISTS scheduler_schedule_runs;
+DROP TABLE IF EXISTS scheduler_schedule_state;
 
 CREATE TABLE scheduler_schedule_state (
     job_key TEXT NOT NULL,

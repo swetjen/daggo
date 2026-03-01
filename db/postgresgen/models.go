@@ -40,18 +40,6 @@ type JobNode struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-type JobSchedule struct {
-	ID          int64     `json:"id"`
-	JobID       int64     `json:"job_id"`
-	ScheduleKey string    `json:"schedule_key"`
-	CronExpr    string    `json:"cron_expr"`
-	Timezone    string    `json:"timezone"`
-	IsEnabled   bool      `json:"is_enabled"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
 type Run struct {
 	ID           int64           `json:"id"`
 	RunKey       string          `json:"run_key"`
@@ -107,17 +95,19 @@ type SchedulerHeartbeat struct {
 }
 
 type SchedulerScheduleRun struct {
-	ID            int64     `json:"id"`
-	JobScheduleID int64     `json:"job_schedule_id"`
-	ScheduledFor  time.Time `json:"scheduled_for"`
-	RunKey        string    `json:"run_key"`
-	TriggeredBy   string    `json:"triggered_by"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	JobKey       string    `json:"job_key"`
+	ScheduleKey  string    `json:"schedule_key"`
+	ScheduledFor time.Time `json:"scheduled_for"`
+	RunKey       string    `json:"run_key"`
+	TriggeredBy  string    `json:"triggered_by"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type SchedulerScheduleState struct {
-	JobScheduleID  int64        `json:"job_schedule_id"`
+	JobKey         string       `json:"job_key"`
+	ScheduleKey    string       `json:"schedule_key"`
 	LastCheckedAt  sql.NullTime `json:"last_checked_at"`
 	LastEnqueuedAt sql.NullTime `json:"last_enqueued_at"`
 	NextRunAt      sql.NullTime `json:"next_run_at"`

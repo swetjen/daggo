@@ -144,6 +144,12 @@ func (h *Handlers) RunCreate(ctx context.Context, req RunCreateRequest) (RunCrea
 	if jobKey == "" {
 		return RunCreateResponse{Error: "job_key is required"}, rpc.StatusInvalid
 	}
+	if h.app == nil || h.app.Registry == nil {
+		return RunCreateResponse{Error: "job registry is unavailable"}, rpc.StatusError
+	}
+	if _, ok := h.app.Registry.JobByKey(jobKey); !ok {
+		return RunCreateResponse{Error: "job not found"}, rpc.StatusInvalid
+	}
 	job, err := h.app.DB.JobGetByKey(ctx, jobKey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -195,6 +201,16 @@ func (h *Handlers) RunRerunStepCreate(ctx context.Context, req RunRerunStepCreat
 			return RunCreateResponse{Error: "source run not found"}, rpc.StatusInvalid
 		}
 		return RunCreateResponse{Error: "failed to load source run"}, rpc.StatusError
+	}
+	if h.app == nil || h.app.Registry == nil {
+		return RunCreateResponse{Error: "job registry is unavailable"}, rpc.StatusError
+	}
+	jobRow, err := h.app.DB.JobGetByID(ctx, sourceRun.JobID)
+	if err != nil {
+		return RunCreateResponse{Error: "failed to load source job"}, rpc.StatusError
+	}
+	if _, ok := h.app.Registry.JobByKey(jobRow.JobKey); !ok {
+		return RunCreateResponse{Error: "job is not currently registered"}, rpc.StatusInvalid
 	}
 
 	if _, err := h.app.DB.RunStepGetByRunIDAndStepKey(ctx, db.RunStepGetByRunIDAndStepKeyParams{

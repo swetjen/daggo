@@ -37,19 +37,3 @@ CREATE TABLE job_edges (
 );
 
 CREATE INDEX idx_job_edges_job_to ON job_edges (job_id, to_step_key, from_step_key);
-
-CREATE TABLE job_schedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id INTEGER NOT NULL,
-    schedule_key TEXT NOT NULL,
-    cron_expr TEXT NOT NULL,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
-    is_enabled INTEGER NOT NULL DEFAULT 1,
-    description TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE,
-    UNIQUE (job_id, schedule_key)
-);
-
-CREATE INDEX idx_job_schedules_job_key ON job_schedules (job_id, schedule_key);

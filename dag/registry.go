@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/swetjen/daggo/db"
 )
@@ -106,10 +107,6 @@ func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB)
 			_ = tx.Rollback()
 			return err
 		}
-		if err := txQueries.JobScheduleDeleteByJobID(ctx, jobRow.ID); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
 
 		for idx, step := range job.Steps {
 			metaBytes, err := json.Marshal(map[string]any{
@@ -145,50 +142,8 @@ func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB)
 			}
 		}
 
-		for _, schedule := range job.Schedules {
-			isEnabled := int64(0)
-			if schedule.Enabled {
-				isEnabled = 1
-			}
-			if schedule.Timezone == "" {
-				schedule.Timezone = "UTC"
-			}
-			_, err := txQueries.JobScheduleUpsert(ctx, db.JobScheduleUpsertParams{
-				JobID:       jobRow.ID,
-				ScheduleKey: schedule.Key,
-				CronExpr:    schedule.CronExpr,
-				Timezone:    schedule.Timezone,
-				IsEnabled:   isEnabled,
-				Description: schedule.Description,
-			})
-			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("upsert schedule %s/%s: %w", job.Key, schedule.Key, err)
-			}
-		}
-
 		if err := tx.Commit(); err != nil {
 			return err
-		}
-	}
-
-	registered := make(map[string]struct{}, len(r.jobs))
-	for jobKey := range r.jobs {
-		registered[jobKey] = struct{}{}
-	}
-	dbJobs, err := queries.JobGetMany(ctx, db.JobGetManyParams{
-		Limit:  1000000,
-		Offset: 0,
-	})
-	if err != nil {
-		return fmt.Errorf("load jobs for prune: %w", err)
-	}
-	for _, dbJob := range dbJobs {
-		if _, ok := registered[dbJob.JobKey]; ok {
-			continue
-		}
-		if err := queries.JobDeleteByID(ctx, dbJob.ID); err != nil {
-			return fmt.Errorf("delete unregistered job %s: %w", dbJob.JobKey, err)
 		}
 	}
 	return nil
@@ -217,6 +172,17 @@ func validateJob(job JobDefinition) error {
 	}
 	if _, err := topologicalOrder(job); err != nil {
 		return fmt.Errorf("job %q invalid DAG: %w", job.Key, err)
+	}
+	scheduleByKey := make(map[string]struct{}, len(job.Schedules))
+	for _, schedule := range job.Schedules {
+		scheduleKey := strings.TrimSpace(schedule.Key)
+		if scheduleKey == "" {
+			return fmt.Errorf("job %q has schedule with empty key", job.Key)
+		}
+		if _, exists := scheduleByKey[scheduleKey]; exists {
+			return fmt.Errorf("job %q has duplicate schedule key %q", job.Key, scheduleKey)
+		}
+		scheduleByKey[scheduleKey] = struct{}{}
 	}
 	return nil
 }

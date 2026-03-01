@@ -115,45 +115,6 @@ func (s *PostgresStore) JobEdgeGetManyByJobID(ctx context.Context, jobID int64) 
 	return mapSlice(rows, fromPostgresJobEdge), nil
 }
 
-func (s *PostgresStore) JobScheduleDeleteByJobID(ctx context.Context, jobID int64) error {
-	return s.queries.JobScheduleDeleteByJobID(ctx, jobID)
-}
-
-func (s *PostgresStore) JobScheduleUpsert(ctx context.Context, arg JobScheduleUpsertParams) (JobSchedule, error) {
-	row, err := s.queries.JobScheduleUpsert(ctx, postgresgen.JobScheduleUpsertParams{
-		JobID:       arg.JobID,
-		ScheduleKey: arg.ScheduleKey,
-		CronExpr:    arg.CronExpr,
-		Timezone:    arg.Timezone,
-		IsEnabled:   arg.IsEnabled != 0,
-		Description: arg.Description,
-	})
-	if err != nil {
-		return JobSchedule{}, err
-	}
-	return fromPostgresJobSchedule(row), nil
-}
-
-func (s *PostgresStore) JobScheduleGetManyByJobID(ctx context.Context, jobID int64) ([]JobSchedule, error) {
-	rows, err := s.queries.JobScheduleGetManyByJobID(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	return mapSlice(rows, fromPostgresJobSchedule), nil
-}
-
-func (s *PostgresStore) JobScheduleGetMany(ctx context.Context, arg JobScheduleGetManyParams) ([]JobScheduleGetManyRow, error) {
-	rows, err := s.queries.JobScheduleGetMany(ctx, postgresgen.JobScheduleGetManyParams{Limit: int32(arg.Limit), Offset: int32(arg.Offset)})
-	if err != nil {
-		return nil, err
-	}
-	return mapSlice(rows, fromPostgresJobScheduleGetManyRow), nil
-}
-
-func (s *PostgresStore) JobScheduleCount(ctx context.Context) (int64, error) {
-	return s.queries.JobScheduleCount(ctx)
-}
-
 func (s *PostgresStore) RunCreate(ctx context.Context, arg RunCreateParams) (Run, error) {
 	row, err := s.queries.RunCreate(ctx, postgresgen.RunCreateParams{
 		RunKey:       arg.RunKey,
@@ -377,8 +338,11 @@ func (s *PostgresStore) SchedulerHeartbeatUpsert(ctx context.Context, arg Schedu
 	return fromPostgresSchedulerHeartbeat(row), nil
 }
 
-func (s *PostgresStore) SchedulerScheduleStateGetByJobScheduleID(ctx context.Context, jobScheduleID int64) (SchedulerScheduleState, error) {
-	row, err := s.queries.SchedulerScheduleStateGetByJobScheduleID(ctx, jobScheduleID)
+func (s *PostgresStore) SchedulerScheduleStateGetByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleStateGetByJobKeyScheduleKeyParams) (SchedulerScheduleState, error) {
+	row, err := s.queries.SchedulerScheduleStateGetByJobKeyScheduleKey(ctx, postgresgen.SchedulerScheduleStateGetByJobKeyScheduleKeyParams{
+		JobKey:      arg.JobKey,
+		ScheduleKey: arg.ScheduleKey,
+	})
 	if err != nil {
 		return SchedulerScheduleState{}, err
 	}
@@ -387,7 +351,8 @@ func (s *PostgresStore) SchedulerScheduleStateGetByJobScheduleID(ctx context.Con
 
 func (s *PostgresStore) SchedulerScheduleStateUpsert(ctx context.Context, arg SchedulerScheduleStateUpsertParams) (SchedulerScheduleState, error) {
 	row, err := s.queries.SchedulerScheduleStateUpsert(ctx, postgresgen.SchedulerScheduleStateUpsertParams{
-		JobScheduleID:  arg.JobScheduleID,
+		JobKey:         arg.JobKey,
+		ScheduleKey:    arg.ScheduleKey,
 		LastCheckedAt:  toNullTime(arg.LastCheckedAt),
 		LastEnqueuedAt: toNullTime(arg.LastEnqueuedAt),
 		NextRunAt:      toNullTime(arg.NextRunAt),
@@ -398,12 +363,28 @@ func (s *PostgresStore) SchedulerScheduleStateUpsert(ctx context.Context, arg Sc
 	return fromPostgresSchedulerScheduleState(row), nil
 }
 
+func (s *PostgresStore) SchedulerScheduleStateGetMany(ctx context.Context) ([]SchedulerScheduleState, error) {
+	rows, err := s.queries.SchedulerScheduleStateGetMany(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresSchedulerScheduleState), nil
+}
+
+func (s *PostgresStore) SchedulerScheduleStateDeleteByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams) error {
+	return s.queries.SchedulerScheduleStateDeleteByJobKeyScheduleKey(ctx, postgresgen.SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams{
+		JobKey:      arg.JobKey,
+		ScheduleKey: arg.ScheduleKey,
+	})
+}
+
 func (s *PostgresStore) SchedulerScheduleRunsCreateIfAbsent(ctx context.Context, arg SchedulerScheduleRunsCreateIfAbsentParams) ([]SchedulerScheduleRun, error) {
 	rows, err := s.queries.SchedulerScheduleRunsCreateIfAbsent(ctx, postgresgen.SchedulerScheduleRunsCreateIfAbsentParams{
-		JobScheduleID: arg.JobScheduleID,
-		ScheduledFor:  mustParseStoredTime(arg.ScheduledFor),
-		RunKey:        arg.RunKey,
-		TriggeredBy:   arg.TriggeredBy,
+		JobKey:       arg.JobKey,
+		ScheduleKey:  arg.ScheduleKey,
+		ScheduledFor: mustParseStoredTime(arg.ScheduledFor),
+		RunKey:       arg.RunKey,
+		TriggeredBy:  arg.TriggeredBy,
 	})
 	if err != nil {
 		return nil, err
@@ -427,12 +408,19 @@ func (s *PostgresStore) SchedulerScheduleRunDeleteByID(ctx context.Context, id i
 	return s.queries.SchedulerScheduleRunDeleteByID(ctx, id)
 }
 
-func (s *PostgresStore) SchedulerScheduleGetEnabledMany(ctx context.Context) ([]SchedulerScheduleGetEnabledManyRow, error) {
-	rows, err := s.queries.SchedulerScheduleGetEnabledMany(ctx)
+func (s *PostgresStore) SchedulerScheduleRunGetDistinctMany(ctx context.Context) ([]SchedulerScheduleRunGetDistinctManyRow, error) {
+	rows, err := s.queries.SchedulerScheduleRunGetDistinctMany(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return mapSlice(rows, fromPostgresSchedulerScheduleGetEnabledManyRow), nil
+	return mapSlice(rows, fromPostgresSchedulerScheduleRunGetDistinctManyRow), nil
+}
+
+func (s *PostgresStore) SchedulerScheduleRunsDeleteByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams) error {
+	return s.queries.SchedulerScheduleRunsDeleteByJobKeyScheduleKey(ctx, postgresgen.SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams{
+		JobKey:      arg.JobKey,
+		ScheduleKey: arg.ScheduleKey,
+	})
 }
 
 func mapSlice[A any, B any](rows []A, mapper func(A) B) []B {
@@ -476,35 +464,6 @@ func fromPostgresJobEdge(row postgresgen.JobEdge) JobEdge {
 		FromStepKey: row.FromStepKey,
 		ToStepKey:   row.ToStepKey,
 		CreatedAt:   formatTime(row.CreatedAt),
-	}
-}
-
-func fromPostgresJobSchedule(row postgresgen.JobSchedule) JobSchedule {
-	return JobSchedule{
-		ID:          row.ID,
-		JobID:       row.JobID,
-		ScheduleKey: row.ScheduleKey,
-		CronExpr:    row.CronExpr,
-		Timezone:    row.Timezone,
-		IsEnabled:   boolToInt64(row.IsEnabled),
-		Description: row.Description,
-		CreatedAt:   formatTime(row.CreatedAt),
-		UpdatedAt:   formatTime(row.UpdatedAt),
-	}
-}
-
-func fromPostgresJobScheduleGetManyRow(row postgresgen.JobScheduleGetManyRow) JobScheduleGetManyRow {
-	return JobScheduleGetManyRow{
-		ID:          row.ID,
-		JobID:       row.JobID,
-		JobKey:      row.JobKey,
-		ScheduleKey: row.ScheduleKey,
-		CronExpr:    row.CronExpr,
-		Timezone:    row.Timezone,
-		IsEnabled:   boolToInt64(row.IsEnabled),
-		Description: row.Description,
-		CreatedAt:   formatTime(row.CreatedAt),
-		UpdatedAt:   formatTime(row.UpdatedAt),
 	}
 }
 
@@ -632,7 +591,8 @@ func fromPostgresSchedulerHeartbeat(row postgresgen.SchedulerHeartbeat) Schedule
 
 func fromPostgresSchedulerScheduleState(row postgresgen.SchedulerScheduleState) SchedulerScheduleState {
 	return SchedulerScheduleState{
-		JobScheduleID:  row.JobScheduleID,
+		JobKey:         row.JobKey,
+		ScheduleKey:    row.ScheduleKey,
 		LastCheckedAt:  formatNullTime(row.LastCheckedAt),
 		LastEnqueuedAt: formatNullTime(row.LastEnqueuedAt),
 		NextRunAt:      formatNullTime(row.NextRunAt),
@@ -642,25 +602,21 @@ func fromPostgresSchedulerScheduleState(row postgresgen.SchedulerScheduleState) 
 
 func fromPostgresSchedulerScheduleRun(row postgresgen.SchedulerScheduleRun) SchedulerScheduleRun {
 	return SchedulerScheduleRun{
-		ID:            row.ID,
-		JobScheduleID: row.JobScheduleID,
-		ScheduledFor:  formatTime(row.ScheduledFor),
-		RunKey:        row.RunKey,
-		TriggeredBy:   row.TriggeredBy,
-		CreatedAt:     formatTime(row.CreatedAt),
-		UpdatedAt:     formatTime(row.UpdatedAt),
+		ID:           row.ID,
+		JobKey:       row.JobKey,
+		ScheduleKey:  row.ScheduleKey,
+		ScheduledFor: formatTime(row.ScheduledFor),
+		RunKey:       row.RunKey,
+		TriggeredBy:  row.TriggeredBy,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
 	}
 }
 
-func fromPostgresSchedulerScheduleGetEnabledManyRow(row postgresgen.SchedulerScheduleGetEnabledManyRow) SchedulerScheduleGetEnabledManyRow {
-	return SchedulerScheduleGetEnabledManyRow{
-		ID:          row.ID,
-		JobID:       row.JobID,
+func fromPostgresSchedulerScheduleRunGetDistinctManyRow(row postgresgen.SchedulerScheduleRunGetDistinctManyRow) SchedulerScheduleRunGetDistinctManyRow {
+	return SchedulerScheduleRunGetDistinctManyRow{
 		JobKey:      row.JobKey,
 		ScheduleKey: row.ScheduleKey,
-		CronExpr:    row.CronExpr,
-		Timezone:    row.Timezone,
-		Description: row.Description,
 	}
 }
 

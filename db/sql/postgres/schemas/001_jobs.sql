@@ -35,18 +35,3 @@ CREATE TABLE job_edges (
 );
 
 CREATE INDEX idx_job_edges_job_to ON job_edges (job_id, to_step_key, from_step_key);
-
-CREATE TABLE job_schedules (
-    id BIGSERIAL PRIMARY KEY,
-    job_id BIGINT NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
-    schedule_key TEXT NOT NULL,
-    cron_expr TEXT NOT NULL,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
-    is_enabled BOOLEAN NOT NULL DEFAULT true,
-    description TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (job_id, schedule_key)
-);
-
-CREATE INDEX idx_job_schedules_job_key ON job_schedules (job_id, schedule_key);

@@ -72,6 +72,7 @@ func TestSchedulerRunTick_EnqueuesDueRunAndPersistsState(t *testing.T) {
 		SchedulerKey:  "test-scheduler",
 		TickInterval:  15 * time.Second,
 		MaxDuePerTick: 4,
+		Registry:      registry,
 	})
 	scheduler.nowFn = func() time.Time { return now }
 	scheduler.runTick(ctx)
@@ -92,14 +93,10 @@ func TestSchedulerRunTick_EnqueuesDueRunAndPersistsState(t *testing.T) {
 		t.Fatalf("expected one enqueued run ID matching created run, got %v", enqueued)
 	}
 
-	schedules, err := queries.SchedulerScheduleGetEnabledMany(ctx)
-	if err != nil {
-		t.Fatalf("load schedules: %v", err)
-	}
-	if len(schedules) != 1 {
-		t.Fatalf("expected one enabled schedule, got %d", len(schedules))
-	}
-	state, err := queries.SchedulerScheduleStateGetByJobScheduleID(ctx, schedules[0].ID)
+	state, err := queries.SchedulerScheduleStateGetByJobKeyScheduleKey(ctx, db.SchedulerScheduleStateGetByJobKeyScheduleKeyParams{
+		JobKey:      job.Key,
+		ScheduleKey: "every_minute",
+	})
 	if err != nil {
 		t.Fatalf("load scheduler state: %v", err)
 	}
@@ -119,6 +116,60 @@ func TestSchedulerRunTick_EnqueuesDueRunAndPersistsState(t *testing.T) {
 	}
 	if heartbeatCount != 1 {
 		t.Fatalf("expected one heartbeat row, got %d", heartbeatCount)
+	}
+}
+
+func TestSchedulerRunTick_UsesGeneratedScheduleKey(t *testing.T) {
+	ctx := context.Background()
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	job := NewJob("scheduler_generated_key").
+		Add(
+			Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+				return schedulerSourceOutput{Value: 1}, nil
+			}),
+		).
+		AddSchedule(ScheduleDefinition{
+			CronExpr: "* * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		MustBuild()
+
+	registry := NewRegistry()
+	if err := registry.Register(job); err != nil {
+		t.Fatalf("register job: %v", err)
+	}
+	if err := registry.SyncToDB(ctx, queries, pool); err != nil {
+		t.Fatalf("sync registry: %v", err)
+	}
+
+	now := time.Date(2026, time.February, 23, 18, 6, 2, 0, time.UTC)
+	enqueuer := &recordingEnqueuer{}
+	scheduler := NewScheduler(queries, pool, enqueuer, SchedulerOptions{
+		SchedulerKey:  "test-generated-key",
+		TickInterval:  15 * time.Second,
+		MaxDuePerTick: 4,
+		Registry:      registry,
+	})
+	scheduler.nowFn = func() time.Time { return now }
+	scheduler.runTick(ctx)
+
+	runRows, err := queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected exactly one scheduled run, got %d", len(runRows))
+	}
+	if got := runRows[0].TriggeredBy; got != "scheduler:every_minute" {
+		t.Fatalf("expected triggered_by scheduler:every_minute, got %q", got)
 	}
 }
 
@@ -160,20 +211,14 @@ func TestSchedulerRunTick_DedupesScheduledMoment(t *testing.T) {
 		SchedulerKey:  "test-scheduler-dedupe",
 		TickInterval:  15 * time.Second,
 		MaxDuePerTick: 4,
+		Registry:      registry,
 	})
 	scheduler.nowFn = func() time.Time { return now }
 	scheduler.runTick(ctx)
 
-	schedules, err := queries.SchedulerScheduleGetEnabledMany(ctx)
-	if err != nil {
-		t.Fatalf("load schedules: %v", err)
-	}
-	if len(schedules) != 1 {
-		t.Fatalf("expected one enabled schedule, got %d", len(schedules))
-	}
-
 	_, err = queries.SchedulerScheduleStateUpsert(ctx, db.SchedulerScheduleStateUpsertParams{
-		JobScheduleID:  schedules[0].ID,
+		JobKey:         job.Key,
+		ScheduleKey:    "every_minute",
 		LastCheckedAt:  now.UTC().Format(time.RFC3339Nano),
 		LastEnqueuedAt: "",
 		NextRunAt:      "",
@@ -203,6 +248,116 @@ func TestSchedulerRunTick_DedupesScheduledMoment(t *testing.T) {
 	}
 	if claimCount != 1 {
 		t.Fatalf("expected one schedule claim row, got %d", claimCount)
+	}
+}
+
+func TestSchedulerRunTick_PrunesRemovedSchedulesButPreservesRuns(t *testing.T) {
+	ctx := context.Background()
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	source := Define[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+		return schedulerSourceOutput{Value: 1}, nil
+	})
+
+	jobWithSchedule := NewJob("scheduler_removed").
+		Add(source).
+		AddSchedule(ScheduleDefinition{
+			Key:      "every_minute",
+			CronExpr: "* * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		MustBuild()
+
+	initialRegistry := NewRegistry()
+	if err := initialRegistry.Register(jobWithSchedule); err != nil {
+		t.Fatalf("register initial job: %v", err)
+	}
+	if err := initialRegistry.SyncToDB(ctx, queries, pool); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	now := time.Date(2026, time.February, 23, 19, 2, 2, 0, time.UTC)
+	enqueuer := &recordingEnqueuer{}
+	scheduler := NewScheduler(queries, pool, enqueuer, SchedulerOptions{
+		SchedulerKey:  "test-scheduler-prune",
+		TickInterval:  15 * time.Second,
+		MaxDuePerTick: 4,
+		Registry:      initialRegistry,
+	})
+	scheduler.nowFn = func() time.Time { return now }
+	scheduler.runTick(ctx)
+
+	runRows, err := queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs after initial tick: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected one historical run before schedule removal, got %d", len(runRows))
+	}
+
+	states, err := queries.SchedulerScheduleStateGetMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler states after initial tick: %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("expected one scheduler state before schedule removal, got %d", len(states))
+	}
+
+	claims, err := queries.SchedulerScheduleRunGetDistinctMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler claims after initial tick: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("expected one scheduler claim before schedule removal, got %d", len(claims))
+	}
+
+	jobWithoutSchedule := NewJob("scheduler_removed").Add(source).MustBuild()
+	nextRegistry := NewRegistry()
+	if err := nextRegistry.Register(jobWithoutSchedule); err != nil {
+		t.Fatalf("register updated job: %v", err)
+	}
+	if err := nextRegistry.SyncToDB(ctx, queries, pool); err != nil {
+		t.Fatalf("updated sync: %v", err)
+	}
+
+	scheduler = NewScheduler(queries, pool, enqueuer, SchedulerOptions{
+		SchedulerKey:  "test-scheduler-prune",
+		TickInterval:  15 * time.Second,
+		MaxDuePerTick: 4,
+		Registry:      nextRegistry,
+	})
+	scheduler.nowFn = func() time.Time { return now.Add(2 * time.Minute) }
+	scheduler.runTick(ctx)
+
+	runRows, err = queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs after schedule removal: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected historical run to be preserved after schedule removal, got %d", len(runRows))
+	}
+
+	states, err = queries.SchedulerScheduleStateGetMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler states after schedule removal: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("expected scheduler state to be pruned after schedule removal, got %d", len(states))
+	}
+
+	claims, err = queries.SchedulerScheduleRunGetDistinctMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler claims after schedule removal: %v", err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("expected scheduler claims to be pruned after schedule removal, got %d", len(claims))
 	}
 }
 
@@ -244,6 +399,7 @@ func TestSchedulerRunTick_DoesNotBackfillBurst(t *testing.T) {
 		SchedulerKey:  "test-non-backfill",
 		TickInterval:  15 * time.Second,
 		MaxDuePerTick: 24,
+		Registry:      registry,
 	})
 	scheduler.nowFn = func() time.Time { return now }
 	scheduler.runTick(ctx)
@@ -323,6 +479,7 @@ func TestSchedulerRunTick_SkipsRunCreationWhenDeployDrainActive(t *testing.T) {
 		TickInterval:  15 * time.Second,
 		MaxDuePerTick: 4,
 		DeployLock:    deployLock,
+		Registry:      registry,
 	})
 	scheduler.nowFn = func() time.Time { return now }
 	scheduler.runTick(ctx)

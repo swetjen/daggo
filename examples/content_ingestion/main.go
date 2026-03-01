@@ -94,7 +94,6 @@ func buildContentIngestionJob() dag.JobDefinition {
 		WithDescription("Scrape a page, fan out extraction work, then persist a consolidated record.").
 		Add(scrapePage, extractTitle, extractEntities, extractLinks, updateIndex).
 		AddSchedule(dag.ScheduleDefinition{
-			Key:      "every_15_minutes",
 			CronExpr: "*/15 * * * *",
 			Timezone: "UTC",
 			Enabled:  true,

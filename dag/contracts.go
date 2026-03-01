@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -137,14 +138,10 @@ func (b *JobBuilder) WithDefaultParamsJSON(defaultParamsJSON string) *JobBuilder
 }
 
 func (b *JobBuilder) AddSchedule(schedule ScheduleDefinition) *JobBuilder {
-	scheduleKey := strings.TrimSpace(schedule.Key)
-	if scheduleKey == "" {
-		panic("dag.JobBuilder.AddSchedule: schedule key is required")
-	}
-	schedule.Key = scheduleKey
 	if strings.TrimSpace(schedule.Timezone) == "" {
 		schedule.Timezone = "UTC"
 	}
+	schedule.Key = resolveScheduleKey(schedule, b.schedules)
 	b.schedules = append(b.schedules, schedule)
 	return b
 }
@@ -339,6 +336,159 @@ func inferSteps(jobKey string, nodes []nodeSpec) ([]StepDefinition, error) {
 	}
 
 	return steps, nil
+}
+
+func resolveScheduleKey(schedule ScheduleDefinition, existing []ScheduleDefinition) string {
+	explicitKey := strings.TrimSpace(schedule.Key)
+	if explicitKey != "" {
+		return explicitKey
+	}
+
+	baseKey := inferScheduleKey(schedule.CronExpr)
+	used := make(map[string]struct{}, len(existing))
+	for _, item := range existing {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			continue
+		}
+		used[key] = struct{}{}
+	}
+	if _, ok := used[baseKey]; !ok {
+		return baseKey
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := baseKey + "_" + strconv.Itoa(suffix)
+		if _, ok := used[candidate]; !ok {
+			return candidate
+		}
+	}
+}
+
+func inferScheduleKey(cronExpr string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(cronExpr))
+	switch trimmed {
+	case "":
+		return "schedule"
+	case "@yearly", "@annually":
+		return "yearly"
+	case "@monthly":
+		return "monthly"
+	case "@weekly":
+		return "weekly"
+	case "@daily", "@midnight":
+		return "daily"
+	case "@hourly":
+		return "hourly"
+	}
+
+	fields := strings.Fields(trimmed)
+	if len(fields) != 5 {
+		return "cron_" + slugifyScheduleToken(trimmed)
+	}
+
+	minute, hour, dom, month, dow := fields[0], fields[1], fields[2], fields[3], fields[4]
+	switch {
+	case minute == "*" && hour == "*" && dom == "*" && month == "*" && dow == "*":
+		return "every_minute"
+	case strings.HasPrefix(minute, "*/") && hour == "*" && dom == "*" && month == "*" && dow == "*":
+		step := strings.TrimPrefix(minute, "*/")
+		if isDigits(step) {
+			return "every_" + step + "_minutes"
+		}
+	case isDigits(minute) && hour == "*" && dom == "*" && month == "*" && dow == "*":
+		if minute == "0" {
+			return "hourly"
+		}
+		return "hourly_at_" + zeroPad(minute)
+	case isDigits(minute) && strings.HasPrefix(hour, "*/") && dom == "*" && month == "*" && dow == "*":
+		step := strings.TrimPrefix(hour, "*/")
+		if isDigits(step) {
+			return "every_" + step + "_hours_at_" + zeroPad(minute)
+		}
+	case isDigits(minute) && isDigits(hour) && dom == "*" && month == "*" && dow == "*":
+		if minute == "0" && hour == "0" {
+			return "daily"
+		}
+		return "daily_at_" + zeroPad(hour) + "_" + zeroPad(minute)
+	case isDigits(minute) && isDigits(hour) && dom == "*" && month == "*" && weekdayKey(dow) != "":
+		return "weekly_on_" + weekdayKey(dow) + "_at_" + zeroPad(hour) + "_" + zeroPad(minute)
+	case isDigits(minute) && isDigits(hour) && isDigits(dom) && month == "*" && dow == "*":
+		if dom == "1" && minute == "0" && hour == "0" {
+			return "monthly"
+		}
+		return "monthly_on_" + dom + "_at_" + zeroPad(hour) + "_" + zeroPad(minute)
+	}
+
+	return "cron_" + slugifyScheduleToken(strings.Join(fields, "_"))
+}
+
+func slugifyScheduleToken(value string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if lastUnderscore {
+				continue
+			}
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "schedule"
+	}
+	return out
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func zeroPad(value string) string {
+	if !isDigits(value) {
+		return value
+	}
+	if len(value) >= 2 {
+		return value
+	}
+	return "0" + value
+}
+
+func weekdayKey(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "7", "sun":
+		return "sun"
+	case "1", "mon":
+		return "mon"
+	case "2", "tue":
+		return "tue"
+	case "3", "wed":
+		return "wed"
+	case "4", "thu":
+		return "thu"
+	case "5", "fri":
+		return "fri"
+	case "6", "sat":
+		return "sat"
+	default:
+		return ""
+	}
 }
 
 func classifyInputFieldType(fieldType reflect.Type) (InputResolutionMode, reflect.Type, error) {

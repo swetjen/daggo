@@ -58,48 +58,37 @@ func (q *Queries) SchedulerHeartbeatUpsert(ctx context.Context, arg SchedulerHea
 	return i, err
 }
 
-const schedulerScheduleGetEnabledMany = `-- name: SchedulerScheduleGetEnabledMany :many
-SELECT js.id,
-       js.job_id,
-       j.job_key,
-       js.schedule_key,
-       js.cron_expr,
-       js.timezone,
-       js.description
-FROM job_schedules js
-JOIN jobs j ON j.id = js.job_id
-WHERE js.is_enabled = true
-ORDER BY j.job_key, js.schedule_key, js.id
+const schedulerScheduleRunDeleteByID = `-- name: SchedulerScheduleRunDeleteByID :exec
+DELETE FROM scheduler_schedule_runs
+WHERE id = $1
 `
 
-type SchedulerScheduleGetEnabledManyRow struct {
-	ID          int64  `json:"id"`
-	JobID       int64  `json:"job_id"`
-	JobKey      string `json:"job_key"`
-	ScheduleKey string `json:"schedule_key"`
-	CronExpr    string `json:"cron_expr"`
-	Timezone    string `json:"timezone"`
-	Description string `json:"description"`
+func (q *Queries) SchedulerScheduleRunDeleteByID(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, schedulerScheduleRunDeleteByID, id)
+	return err
 }
 
-func (q *Queries) SchedulerScheduleGetEnabledMany(ctx context.Context) ([]SchedulerScheduleGetEnabledManyRow, error) {
-	rows, err := q.db.QueryContext(ctx, schedulerScheduleGetEnabledMany)
+const schedulerScheduleRunGetDistinctMany = `-- name: SchedulerScheduleRunGetDistinctMany :many
+SELECT DISTINCT job_key, schedule_key
+FROM scheduler_schedule_runs
+ORDER BY job_key, schedule_key
+`
+
+type SchedulerScheduleRunGetDistinctManyRow struct {
+	JobKey      string `json:"job_key"`
+	ScheduleKey string `json:"schedule_key"`
+}
+
+func (q *Queries) SchedulerScheduleRunGetDistinctMany(ctx context.Context) ([]SchedulerScheduleRunGetDistinctManyRow, error) {
+	rows, err := q.db.QueryContext(ctx, schedulerScheduleRunGetDistinctMany)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SchedulerScheduleGetEnabledManyRow
+	var items []SchedulerScheduleRunGetDistinctManyRow
 	for rows.Next() {
-		var i SchedulerScheduleGetEnabledManyRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
-			&i.JobKey,
-			&i.ScheduleKey,
-			&i.CronExpr,
-			&i.Timezone,
-			&i.Description,
-		); err != nil {
+		var i SchedulerScheduleRunGetDistinctManyRow
+		if err := rows.Scan(&i.JobKey, &i.ScheduleKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -113,23 +102,13 @@ func (q *Queries) SchedulerScheduleGetEnabledMany(ctx context.Context) ([]Schedu
 	return items, nil
 }
 
-const schedulerScheduleRunDeleteByID = `-- name: SchedulerScheduleRunDeleteByID :exec
-DELETE FROM scheduler_schedule_runs
-WHERE id = $1
-`
-
-func (q *Queries) SchedulerScheduleRunDeleteByID(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, schedulerScheduleRunDeleteByID, id)
-	return err
-}
-
 const schedulerScheduleRunUpdateByID = `-- name: SchedulerScheduleRunUpdateByID :one
 UPDATE scheduler_schedule_runs
 SET run_key = $1,
     triggered_by = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, job_schedule_id, scheduled_for, run_key, triggered_by, created_at, updated_at
+RETURNING id, job_key, schedule_key, scheduled_for, run_key, triggered_by, created_at, updated_at
 `
 
 type SchedulerScheduleRunUpdateByIDParams struct {
@@ -143,7 +122,8 @@ func (q *Queries) SchedulerScheduleRunUpdateByID(ctx context.Context, arg Schedu
 	var i SchedulerScheduleRun
 	err := row.Scan(
 		&i.ID,
-		&i.JobScheduleID,
+		&i.JobKey,
+		&i.ScheduleKey,
 		&i.ScheduledFor,
 		&i.RunKey,
 		&i.TriggeredBy,
@@ -155,27 +135,30 @@ func (q *Queries) SchedulerScheduleRunUpdateByID(ctx context.Context, arg Schedu
 
 const schedulerScheduleRunsCreateIfAbsent = `-- name: SchedulerScheduleRunsCreateIfAbsent :many
 INSERT INTO scheduler_schedule_runs (
-    job_schedule_id,
+    job_key,
+    schedule_key,
     scheduled_for,
     run_key,
     triggered_by
 )
-VALUES ($1, $2, $3, $4)
-ON CONFLICT(job_schedule_id, scheduled_for)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT(job_key, schedule_key, scheduled_for)
 DO NOTHING
-RETURNING id, job_schedule_id, scheduled_for, run_key, triggered_by, created_at, updated_at
+RETURNING id, job_key, schedule_key, scheduled_for, run_key, triggered_by, created_at, updated_at
 `
 
 type SchedulerScheduleRunsCreateIfAbsentParams struct {
-	JobScheduleID int64     `json:"job_schedule_id"`
-	ScheduledFor  time.Time `json:"scheduled_for"`
-	RunKey        string    `json:"run_key"`
-	TriggeredBy   string    `json:"triggered_by"`
+	JobKey       string    `json:"job_key"`
+	ScheduleKey  string    `json:"schedule_key"`
+	ScheduledFor time.Time `json:"scheduled_for"`
+	RunKey       string    `json:"run_key"`
+	TriggeredBy  string    `json:"triggered_by"`
 }
 
 func (q *Queries) SchedulerScheduleRunsCreateIfAbsent(ctx context.Context, arg SchedulerScheduleRunsCreateIfAbsentParams) ([]SchedulerScheduleRun, error) {
 	rows, err := q.db.QueryContext(ctx, schedulerScheduleRunsCreateIfAbsent,
-		arg.JobScheduleID,
+		arg.JobKey,
+		arg.ScheduleKey,
 		arg.ScheduledFor,
 		arg.RunKey,
 		arg.TriggeredBy,
@@ -189,7 +172,8 @@ func (q *Queries) SchedulerScheduleRunsCreateIfAbsent(ctx context.Context, arg S
 		var i SchedulerScheduleRun
 		if err := rows.Scan(
 			&i.ID,
-			&i.JobScheduleID,
+			&i.JobKey,
+			&i.ScheduleKey,
 			&i.ScheduledFor,
 			&i.RunKey,
 			&i.TriggeredBy,
@@ -209,17 +193,56 @@ func (q *Queries) SchedulerScheduleRunsCreateIfAbsent(ctx context.Context, arg S
 	return items, nil
 }
 
-const schedulerScheduleStateGetByJobScheduleID = `-- name: SchedulerScheduleStateGetByJobScheduleID :one
-SELECT job_schedule_id, last_checked_at, last_enqueued_at, next_run_at, updated_at
-FROM scheduler_schedule_state
-WHERE job_schedule_id = $1
+const schedulerScheduleRunsDeleteByJobKeyScheduleKey = `-- name: SchedulerScheduleRunsDeleteByJobKeyScheduleKey :exec
+DELETE FROM scheduler_schedule_runs
+WHERE job_key = $1
+  AND schedule_key = $2
 `
 
-func (q *Queries) SchedulerScheduleStateGetByJobScheduleID(ctx context.Context, jobScheduleID int64) (SchedulerScheduleState, error) {
-	row := q.db.QueryRowContext(ctx, schedulerScheduleStateGetByJobScheduleID, jobScheduleID)
+type SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams struct {
+	JobKey      string `json:"job_key"`
+	ScheduleKey string `json:"schedule_key"`
+}
+
+func (q *Queries) SchedulerScheduleRunsDeleteByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams) error {
+	_, err := q.db.ExecContext(ctx, schedulerScheduleRunsDeleteByJobKeyScheduleKey, arg.JobKey, arg.ScheduleKey)
+	return err
+}
+
+const schedulerScheduleStateDeleteByJobKeyScheduleKey = `-- name: SchedulerScheduleStateDeleteByJobKeyScheduleKey :exec
+DELETE FROM scheduler_schedule_state
+WHERE job_key = $1
+  AND schedule_key = $2
+`
+
+type SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams struct {
+	JobKey      string `json:"job_key"`
+	ScheduleKey string `json:"schedule_key"`
+}
+
+func (q *Queries) SchedulerScheduleStateDeleteByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams) error {
+	_, err := q.db.ExecContext(ctx, schedulerScheduleStateDeleteByJobKeyScheduleKey, arg.JobKey, arg.ScheduleKey)
+	return err
+}
+
+const schedulerScheduleStateGetByJobKeyScheduleKey = `-- name: SchedulerScheduleStateGetByJobKeyScheduleKey :one
+SELECT job_key, schedule_key, last_checked_at, last_enqueued_at, next_run_at, updated_at
+FROM scheduler_schedule_state
+WHERE job_key = $1
+  AND schedule_key = $2
+`
+
+type SchedulerScheduleStateGetByJobKeyScheduleKeyParams struct {
+	JobKey      string `json:"job_key"`
+	ScheduleKey string `json:"schedule_key"`
+}
+
+func (q *Queries) SchedulerScheduleStateGetByJobKeyScheduleKey(ctx context.Context, arg SchedulerScheduleStateGetByJobKeyScheduleKeyParams) (SchedulerScheduleState, error) {
+	row := q.db.QueryRowContext(ctx, schedulerScheduleStateGetByJobKeyScheduleKey, arg.JobKey, arg.ScheduleKey)
 	var i SchedulerScheduleState
 	err := row.Scan(
-		&i.JobScheduleID,
+		&i.JobKey,
+		&i.ScheduleKey,
 		&i.LastCheckedAt,
 		&i.LastEnqueuedAt,
 		&i.NextRunAt,
@@ -228,25 +251,63 @@ func (q *Queries) SchedulerScheduleStateGetByJobScheduleID(ctx context.Context, 
 	return i, err
 }
 
+const schedulerScheduleStateGetMany = `-- name: SchedulerScheduleStateGetMany :many
+SELECT job_key, schedule_key, last_checked_at, last_enqueued_at, next_run_at, updated_at
+FROM scheduler_schedule_state
+ORDER BY job_key, schedule_key
+`
+
+func (q *Queries) SchedulerScheduleStateGetMany(ctx context.Context) ([]SchedulerScheduleState, error) {
+	rows, err := q.db.QueryContext(ctx, schedulerScheduleStateGetMany)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SchedulerScheduleState
+	for rows.Next() {
+		var i SchedulerScheduleState
+		if err := rows.Scan(
+			&i.JobKey,
+			&i.ScheduleKey,
+			&i.LastCheckedAt,
+			&i.LastEnqueuedAt,
+			&i.NextRunAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const schedulerScheduleStateUpsert = `-- name: SchedulerScheduleStateUpsert :one
 INSERT INTO scheduler_schedule_state (
-    job_schedule_id,
+    job_key,
+    schedule_key,
     last_checked_at,
     last_enqueued_at,
     next_run_at
 )
-VALUES ($1, $2, $3, $4)
-ON CONFLICT(job_schedule_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT(job_key, schedule_key)
 DO UPDATE SET
     last_checked_at = excluded.last_checked_at,
     last_enqueued_at = excluded.last_enqueued_at,
     next_run_at = excluded.next_run_at,
     updated_at = now()
-RETURNING job_schedule_id, last_checked_at, last_enqueued_at, next_run_at, updated_at
+RETURNING job_key, schedule_key, last_checked_at, last_enqueued_at, next_run_at, updated_at
 `
 
 type SchedulerScheduleStateUpsertParams struct {
-	JobScheduleID  int64        `json:"job_schedule_id"`
+	JobKey         string       `json:"job_key"`
+	ScheduleKey    string       `json:"schedule_key"`
 	LastCheckedAt  sql.NullTime `json:"last_checked_at"`
 	LastEnqueuedAt sql.NullTime `json:"last_enqueued_at"`
 	NextRunAt      sql.NullTime `json:"next_run_at"`
@@ -254,14 +315,16 @@ type SchedulerScheduleStateUpsertParams struct {
 
 func (q *Queries) SchedulerScheduleStateUpsert(ctx context.Context, arg SchedulerScheduleStateUpsertParams) (SchedulerScheduleState, error) {
 	row := q.db.QueryRowContext(ctx, schedulerScheduleStateUpsert,
-		arg.JobScheduleID,
+		arg.JobKey,
+		arg.ScheduleKey,
 		arg.LastCheckedAt,
 		arg.LastEnqueuedAt,
 		arg.NextRunAt,
 	)
 	var i SchedulerScheduleState
 	err := row.Scan(
-		&i.JobScheduleID,
+		&i.JobKey,
+		&i.ScheduleKey,
 		&i.LastCheckedAt,
 		&i.LastEnqueuedAt,
 		&i.NextRunAt,

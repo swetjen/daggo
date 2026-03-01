@@ -30,6 +30,8 @@ if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil
 - serves RPC docs under `/rpc/docs/`
 - manages DAGGO's internal worker subprocess command
 
+Current schedules are taken from the jobs registered in memory at startup. DAGGO persists scheduler runtime state and run history, not future schedule definitions.
+
 ## Embedded App Mode
 
 If you want to mount DAGGO inside a larger HTTP server, create an app directly:
@@ -117,6 +119,16 @@ DAGGO wiring is type-driven and validated at build time:
 - Singular input `T`: exactly one upstream producer of `T`.
 - Slice input `[]T`: all upstream producers of `T`, in deterministic topological order.
 - Pointer input `*T`: zero or one producer, with `nil` when absent.
+
+## Schedules
+
+`dag.ScheduleDefinition.Key` is optional. If you omit it, DAGGO derives a stable key from the cron expression, such as `every_minute`, `every_15_minutes`, or `hourly`.
+
+Important runtime behavior:
+
+- Current schedules are registry-backed, not loaded from persisted schedule rows.
+- DAGGO persists scheduler bookkeeping by `(job_key, schedule_key)` for dedupe and next-run tracking.
+- Removing a schedule from code clears that bookkeeping but preserves historical `runs`.
 
 No string-based wiring is required.
 

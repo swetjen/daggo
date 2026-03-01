@@ -3,10 +3,10 @@ package jobs
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/swetjen/daggo/dag"
 	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
@@ -74,20 +74,16 @@ type JobByKeyResponse struct {
 
 func (h *Handlers) JobsGetMany(ctx context.Context, req JobsGetManyRequest) (JobsGetManyResponse, int) {
 	limit, offset := normalizePagination(req.Limit, req.Offset)
-	rows, err := h.app.DB.JobGetMany(ctx, db.JobGetManyParams{Limit: limit, Offset: offset})
-	if err != nil {
-		return JobsGetManyResponse{Error: "failed to load jobs"}, rpc.StatusError
-	}
-	total, err := h.app.DB.JobCount(ctx)
-	if err != nil {
-		return JobsGetManyResponse{Error: "failed to count jobs"}, rpc.StatusError
-	}
+	definitions := currentJobs(h.app)
+	total := int64(len(definitions))
+	start := minInt(int(offset), len(definitions))
+	end := minInt(start+int(limit), len(definitions))
 
-	out := make([]Job, 0, len(rows))
-	for _, row := range rows {
-		job, err := h.loadJobGraph(ctx, row)
+	out := make([]Job, 0, end-start)
+	for _, definition := range definitions[start:end] {
+		job, err := h.loadCurrentJob(ctx, definition)
 		if err != nil {
-			return JobsGetManyResponse{Error: "failed to load job graph"}, rpc.StatusError
+			return JobsGetManyResponse{Error: "failed to load jobs"}, rpc.StatusError
 		}
 		out = append(out, job)
 	}
@@ -95,95 +91,98 @@ func (h *Handlers) JobsGetMany(ctx context.Context, req JobsGetManyRequest) (Job
 }
 
 func (h *Handlers) JobByKey(ctx context.Context, req JobByKeyRequest) (JobByKeyResponse, int) {
-	if strings.TrimSpace(req.JobKey) == "" {
+	definition, ok := currentJobByKey(h.app, req.JobKey)
+	if !ok {
 		return JobByKeyResponse{Error: "job_key is required"}, rpc.StatusInvalid
 	}
-	row, err := h.app.DB.JobGetByKey(ctx, req.JobKey)
+	job, err := h.loadCurrentJob(ctx, definition)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return JobByKeyResponse{Error: "job not found"}, rpc.StatusInvalid
-		}
 		return JobByKeyResponse{Error: "failed to load job"}, rpc.StatusError
-	}
-	job, err := h.loadJobGraph(ctx, row)
-	if err != nil {
-		return JobByKeyResponse{Error: "failed to load job graph"}, rpc.StatusError
 	}
 	return JobByKeyResponse{Job: job}, rpc.StatusOK
 }
 
-func (h *Handlers) loadJobGraph(ctx context.Context, row db.Job) (Job, error) {
-	nodes, err := h.app.DB.JobNodeGetManyByJobID(ctx, row.ID)
+func (h *Handlers) loadCurrentJob(ctx context.Context, definition dag.JobDefinition) (Job, error) {
+	row, err := h.app.DB.JobGetByKey(ctx, definition.Key)
 	if err != nil {
-		return Job{}, err
-	}
-	edges, err := h.app.DB.JobEdgeGetManyByJobID(ctx, row.ID)
-	if err != nil {
-		return Job{}, err
-	}
-	schedules, err := h.app.DB.JobScheduleGetManyByJobID(ctx, row.ID)
-	if err != nil {
-		return Job{}, err
+		if !errors.Is(err, sql.ErrNoRows) {
+			return Job{}, err
+		}
+		row = db.Job{}
 	}
 	return Job{
 		ID:                row.ID,
-		JobKey:            row.JobKey,
-		DisplayName:       row.DisplayName,
-		Description:       row.Description,
-		DefaultParamsJSON: row.DefaultParamsJson,
-		Nodes:             toJobNodes(nodes),
-		Edges:             toJobEdges(edges),
-		Schedules:         toJobSchedules(schedules),
+		JobKey:            definition.Key,
+		DisplayName:       definition.DisplayName,
+		Description:       definition.Description,
+		DefaultParamsJSON: definition.DefaultParamsJSON,
+		Nodes:             toJobNodes(definition.Steps),
+		Edges:             toJobEdges(definition.Steps),
+		Schedules:         toJobSchedules(definition.Schedules),
 	}, nil
 }
 
-func toJobNodes(rows []db.JobNode) []JobNode {
-	out := make([]JobNode, 0, len(rows))
-	for _, row := range rows {
-		node := JobNode{
-			StepKey:     row.StepKey,
-			DisplayName: row.DisplayName,
-			Description: row.Description,
-			Kind:        row.Kind,
-			DependsOn:   []string{},
-		}
-		if strings.TrimSpace(row.MetadataJson) != "" {
-			var payload struct {
-				DependsOn []string `json:"depends_on"`
-			}
-			if err := json.Unmarshal([]byte(row.MetadataJson), &payload); err == nil {
-				if payload.DependsOn == nil {
-					node.DependsOn = []string{}
-				} else {
-					node.DependsOn = payload.DependsOn
-				}
-			}
-		}
-		out = append(out, node)
+func toJobNodes(steps []dag.StepDefinition) []JobNode {
+	out := make([]JobNode, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, JobNode{
+			StepKey:     step.Key,
+			DisplayName: step.DisplayName,
+			Description: step.Description,
+			Kind:        "op",
+			DependsOn:   append([]string(nil), step.DependsOn...),
+		})
 	}
 	return out
 }
 
-func toJobEdges(rows []db.JobEdge) []JobEdge {
-	out := make([]JobEdge, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, JobEdge{FromStepKey: row.FromStepKey, ToStepKey: row.ToStepKey})
+func toJobEdges(steps []dag.StepDefinition) []JobEdge {
+	var out []JobEdge
+	for _, step := range steps {
+		for _, dep := range step.DependsOn {
+			out = append(out, JobEdge{FromStepKey: dep, ToStepKey: step.Key})
+		}
 	}
 	return out
 }
 
-func toJobSchedules(rows []db.JobSchedule) []JobSchedule {
+func toJobSchedules(rows []dag.ScheduleDefinition) []JobSchedule {
 	out := make([]JobSchedule, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, JobSchedule{
-			ScheduleKey: row.ScheduleKey,
+			ScheduleKey: row.Key,
 			CronExpr:    row.CronExpr,
 			Timezone:    row.Timezone,
-			IsEnabled:   row.IsEnabled == 1,
+			IsEnabled:   row.Enabled,
 			Description: row.Description,
 		})
 	}
 	return out
+}
+
+func currentJobs(app *deps.Deps) []dag.JobDefinition {
+	if app == nil || app.Registry == nil {
+		return nil
+	}
+	return app.Registry.Jobs()
+}
+
+func currentJobByKey(app *deps.Deps, jobKey string) (dag.JobDefinition, bool) {
+	if app == nil || app.Registry == nil {
+		return dag.JobDefinition{}, false
+	}
+	trimmed := strings.TrimSpace(jobKey)
+	if trimmed == "" {
+		return dag.JobDefinition{}, false
+	}
+	return app.Registry.JobByKey(trimmed)
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func normalizePagination(limit, offset int64) (int64, int64) {

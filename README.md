@@ -121,7 +121,6 @@ func buildContentIngestionJob() dag.JobDefinition {
 		WithDescription("Scrape a page, fan out extraction work, then persist a consolidated record.").
 		Add(scrapePage, extractTitle, extractEntities, extractLinks, updateIndex).
 		AddSchedule(dag.ScheduleDefinition{
-			Key:      "every_15_minutes",
 			CronExpr: "*/15 * * * *",
 			Timezone: "UTC",
 			Enabled:  true,
@@ -149,6 +148,8 @@ Calling `daggo.Main(...)` or `daggo.Run(...)` gives new users a working runtime 
 4. Serves the embedded admin UI and RPC docs.
 5. Starts the scheduler and async executor.
 6. Handles DAGGO's internal worker subprocess command inside the same application binary.
+
+Current schedules are derived from the jobs you register at startup. DAGGO does not persist future schedule definitions in the database; it persists scheduler bookkeeping and historical runs.
 
 ## Configuration
 
@@ -202,6 +203,15 @@ At startup, DAGGO will:
 5. use PostgreSQL for jobs, runs, scheduler state, and events
 
 The PostgreSQL runtime details and remaining limitations are documented in [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md).
+
+### Schedules
+
+Schedules are declarative job config, not persisted DB records.
+
+- Current schedules come from the in-memory jobs you register at startup.
+- DAGGO persists only scheduler state and dedupe claims for active schedules.
+- Removing a schedule from code clears that scheduler bookkeeping but preserves historical runs.
+- `dag.ScheduleDefinition.Key` is optional; if omitted, DAGGO derives a stable readable key from the cron expression.
 
 #### PostgreSQL via Environment
 

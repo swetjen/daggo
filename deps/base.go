@@ -50,6 +50,7 @@ func NewWithRegistry(ctx context.Context, cfg config.Config, queries db.Store, p
 		TickInterval:  time.Duration(cfg.Scheduler.TickSeconds) * time.Second,
 		MaxDuePerTick: cfg.Scheduler.MaxDuePerTick,
 		DeployLock:    deployLock,
+		Registry:      registry,
 	})
 	if cfg.Scheduler.Enabled {
 		scheduler.Start(ctx)

@@ -21,11 +21,6 @@ type Store interface {
 	JobEdgeDeleteByJobID(context.Context, int64) error
 	JobEdgeCreate(context.Context, JobEdgeCreateParams) (JobEdge, error)
 	JobEdgeGetManyByJobID(context.Context, int64) ([]JobEdge, error)
-	JobScheduleDeleteByJobID(context.Context, int64) error
-	JobScheduleUpsert(context.Context, JobScheduleUpsertParams) (JobSchedule, error)
-	JobScheduleGetManyByJobID(context.Context, int64) ([]JobSchedule, error)
-	JobScheduleGetMany(context.Context, JobScheduleGetManyParams) ([]JobScheduleGetManyRow, error)
-	JobScheduleCount(context.Context) (int64, error)
 
 	RunCreate(context.Context, RunCreateParams) (Run, error)
 	RunGetByID(context.Context, int64) (Run, error)
@@ -48,12 +43,15 @@ type Store interface {
 	RunEventCountByRunID(context.Context, int64) (int64, error)
 
 	SchedulerHeartbeatUpsert(context.Context, SchedulerHeartbeatUpsertParams) (SchedulerHeartbeat, error)
-	SchedulerScheduleStateGetByJobScheduleID(context.Context, int64) (SchedulerScheduleState, error)
+	SchedulerScheduleStateGetByJobKeyScheduleKey(context.Context, SchedulerScheduleStateGetByJobKeyScheduleKeyParams) (SchedulerScheduleState, error)
 	SchedulerScheduleStateUpsert(context.Context, SchedulerScheduleStateUpsertParams) (SchedulerScheduleState, error)
+	SchedulerScheduleStateGetMany(context.Context) ([]SchedulerScheduleState, error)
+	SchedulerScheduleStateDeleteByJobKeyScheduleKey(context.Context, SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams) error
 	SchedulerScheduleRunsCreateIfAbsent(context.Context, SchedulerScheduleRunsCreateIfAbsentParams) ([]SchedulerScheduleRun, error)
 	SchedulerScheduleRunUpdateByID(context.Context, SchedulerScheduleRunUpdateByIDParams) (SchedulerScheduleRun, error)
 	SchedulerScheduleRunDeleteByID(context.Context, int64) error
-	SchedulerScheduleGetEnabledMany(context.Context) ([]SchedulerScheduleGetEnabledManyRow, error)
+	SchedulerScheduleRunGetDistinctMany(context.Context) ([]SchedulerScheduleRunGetDistinctManyRow, error)
+	SchedulerScheduleRunsDeleteByJobKeyScheduleKey(context.Context, SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams) error
 }
 
 func WithTx(store Store, tx *sql.Tx) Store {

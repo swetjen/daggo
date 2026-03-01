@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2026-03-01
+- Made `dag.ScheduleDefinition.Key` optional and derive readable schedule keys from cron expressions by default.
+- Moved current schedule source-of-truth to the in-memory startup registry instead of persisted `job_schedules` rows.
+- Persisted only scheduler runtime bookkeeping by `(job_key, schedule_key)` for dedupe and next-run tracking.
+- Preserved historical runs when jobs or schedules disappear from the current registry.
+- Removed the legacy `job_schedules` table and its query/store surface from SQLite and PostgreSQL.
 - Reduced the runtime RPC surface to docs and OpenAPI only; the app no longer serves live JS/TS/Python generated client routes.
 - Removed the `RPC base` startup banner line and kept the console output focused on the admin UI and RPC docs.
 - Shipped built frontend assets with the module so imported DAGGO apps load the admin UI without requiring local frontend builds.

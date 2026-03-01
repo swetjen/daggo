@@ -233,6 +233,81 @@ func TestBuildSliceInputAllowsZeroProviders(t *testing.T) {
 	}
 }
 
+func TestAddScheduleGeneratesImplicitKey(t *testing.T) {
+	job, err := NewJob("implicit_schedule_key").
+		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+			return testOutput{Name: "ok"}, nil
+		})).
+		AddSchedule(ScheduleDefinition{
+			CronExpr: "*/15 * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		Build()
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+
+	if len(job.Schedules) != 1 {
+		t.Fatalf("expected one schedule, got %d", len(job.Schedules))
+	}
+	if got := job.Schedules[0].Key; got != "every_15_minutes" {
+		t.Fatalf("expected generated key every_15_minutes, got %q", got)
+	}
+}
+
+func TestAddScheduleGeneratedKeysAreDeterministicallyDeduped(t *testing.T) {
+	job, err := NewJob("dedupe_schedule_keys").
+		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+			return testOutput{Name: "ok"}, nil
+		})).
+		AddSchedule(ScheduleDefinition{
+			CronExpr: "0 * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		AddSchedule(ScheduleDefinition{
+			CronExpr: "0 * * * *",
+			Timezone: "America/Chicago",
+			Enabled:  true,
+		}).
+		Build()
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+
+	if len(job.Schedules) != 2 {
+		t.Fatalf("expected two schedules, got %d", len(job.Schedules))
+	}
+	if got := job.Schedules[0].Key; got != "hourly" {
+		t.Fatalf("expected first generated key hourly, got %q", got)
+	}
+	if got := job.Schedules[1].Key; got != "hourly_2" {
+		t.Fatalf("expected second generated key hourly_2, got %q", got)
+	}
+}
+
+func TestAddSchedulePreservesExplicitKey(t *testing.T) {
+	job, err := NewJob("explicit_schedule_key").
+		Add(Define[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+			return testOutput{Name: "ok"}, nil
+		})).
+		AddSchedule(ScheduleDefinition{
+			Key:      "custom_hourly",
+			CronExpr: "0 * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		Build()
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+
+	if got := job.Schedules[0].Key; got != "custom_hourly" {
+		t.Fatalf("expected explicit key custom_hourly, got %q", got)
+	}
+}
+
 func mustFindStep(t *testing.T, job JobDefinition, key string) StepDefinition {
 	t.Helper()
 	for _, step := range job.Steps {

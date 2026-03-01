@@ -23,12 +23,14 @@ type SchedulerOptions struct {
 	TickInterval  time.Duration
 	MaxDuePerTick int
 	DeployLock    *DeployLock
+	Registry      *Registry
 }
 
 type Scheduler struct {
 	queries  db.Store
 	pool     *sql.DB
 	enqueuer RunEnqueuer
+	registry *Registry
 
 	schedulerKey  string
 	tickInterval  time.Duration
@@ -57,6 +59,7 @@ func NewScheduler(queries db.Store, pool *sql.DB, enqueuer RunEnqueuer, opts Sch
 		queries:       queries,
 		pool:          pool,
 		enqueuer:      enqueuer,
+		registry:      opts.Registry,
 		schedulerKey:  schedulerKey,
 		tickInterval:  tickInterval,
 		maxDuePerTick: maxDuePerTick,
@@ -124,9 +127,12 @@ func (s *Scheduler) runTickWithNow(ctx context.Context, now time.Time) error {
 	if s.deployLock != nil && s.deployLock.IsDraining() {
 		return nil
 	}
-	schedules, err := s.queries.SchedulerScheduleGetEnabledMany(ctx)
+	schedules, err := s.currentSchedules(ctx)
 	if err != nil {
 		return fmt.Errorf("load enabled schedules: %w", err)
+	}
+	if err := s.pruneInactiveScheduleRecords(ctx, schedules); err != nil {
+		return fmt.Errorf("prune inactive schedules: %w", err)
 	}
 	if len(schedules) == 0 {
 		return nil
@@ -144,14 +150,18 @@ func (s *Scheduler) runTickWithNow(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (s *Scheduler) processSchedule(ctx context.Context, schedule db.SchedulerScheduleGetEnabledManyRow, now time.Time) error {
-	state, err := s.queries.SchedulerScheduleStateGetByJobScheduleID(ctx, schedule.ID)
+func (s *Scheduler) processSchedule(ctx context.Context, schedule runtimeSchedule, now time.Time) error {
+	state, err := s.queries.SchedulerScheduleStateGetByJobKeyScheduleKey(ctx, db.SchedulerScheduleStateGetByJobKeyScheduleKeyParams{
+		JobKey:      schedule.JobKey,
+		ScheduleKey: schedule.ScheduleKey,
+	})
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("load scheduler state: %w", err)
 	}
 	if err == sql.ErrNoRows {
 		state = db.SchedulerScheduleState{
-			JobScheduleID:  schedule.ID,
+			JobKey:         schedule.JobKey,
+			ScheduleKey:    schedule.ScheduleKey,
 			LastCheckedAt:  "",
 			LastEnqueuedAt: "",
 			NextRunAt:      "",
@@ -164,13 +174,13 @@ func (s *Scheduler) processSchedule(ctx context.Context, schedule db.SchedulerSc
 	}
 	location, err := time.LoadLocation(locationName)
 	if err != nil {
-		_ = s.persistScheduleState(ctx, schedule.ID, now.UTC(), state.LastEnqueuedAt, "")
+		_ = s.persistScheduleState(ctx, schedule.JobKey, schedule.ScheduleKey, now.UTC(), state.LastEnqueuedAt, "")
 		return fmt.Errorf("invalid timezone %q: %w", schedule.Timezone, err)
 	}
 
 	spec, err := s.cronParser.Parse(schedule.CronExpr)
 	if err != nil {
-		_ = s.persistScheduleState(ctx, schedule.ID, now.UTC(), state.LastEnqueuedAt, "")
+		_ = s.persistScheduleState(ctx, schedule.JobKey, schedule.ScheduleKey, now.UTC(), state.LastEnqueuedAt, "")
 		return fmt.Errorf("invalid cron expression %q: %w", schedule.CronExpr, err)
 	}
 
@@ -192,10 +202,11 @@ func (s *Scheduler) processSchedule(ctx context.Context, schedule db.SchedulerSc
 		dueUTC := due.UTC()
 		dueAt := dueUTC.Format(time.RFC3339Nano)
 		claims, err := s.queries.SchedulerScheduleRunsCreateIfAbsent(ctx, db.SchedulerScheduleRunsCreateIfAbsentParams{
-			JobScheduleID: schedule.ID,
-			ScheduledFor:  dueAt,
-			RunKey:        "",
-			TriggeredBy:   triggeredBy,
+			JobKey:       schedule.JobKey,
+			ScheduleKey:  schedule.ScheduleKey,
+			ScheduledFor: dueAt,
+			RunKey:       "",
+			TriggeredBy:  triggeredBy,
 		})
 		if err != nil {
 			return fmt.Errorf("claim schedule run at %s: %w", dueAt, err)
@@ -214,7 +225,7 @@ func (s *Scheduler) processSchedule(ctx context.Context, schedule db.SchedulerSc
 			TriggeredBy: triggeredBy,
 			ID:          claims[0].ID,
 		}); err != nil {
-			slog.Error("daggo: failed to update schedule claim with run key", "schedule_id", schedule.ID, "claim_id", claims[0].ID, "run_id", run.ID, "err", err)
+			slog.Error("daggo: failed to update schedule claim with run key", "job_key", schedule.JobKey, "schedule_key", schedule.ScheduleKey, "claim_id", claims[0].ID, "run_id", run.ID, "err", err)
 		}
 		if s.enqueuer != nil {
 			s.enqueuer.EnqueueRun(run.ID)
@@ -226,7 +237,7 @@ func (s *Scheduler) processSchedule(ctx context.Context, schedule db.SchedulerSc
 	if !nextRun.IsZero() {
 		nextRunAt = nextRun.UTC().Format(time.RFC3339Nano)
 	}
-	if err := s.persistScheduleState(ctx, schedule.ID, now.UTC(), lastEnqueuedAt, nextRunAt); err != nil {
+	if err := s.persistScheduleState(ctx, schedule.JobKey, schedule.ScheduleKey, now.UTC(), lastEnqueuedAt, nextRunAt); err != nil {
 		return fmt.Errorf("persist schedule state: %w", err)
 	}
 	return nil
@@ -248,9 +259,10 @@ func (s *Scheduler) resolveDueTimes(spec cron.Schedule, base, now time.Time) ([]
 	return dueTimes, candidate
 }
 
-func (s *Scheduler) persistScheduleState(ctx context.Context, jobScheduleID int64, checkedAt time.Time, lastEnqueuedAt, nextRunAt string) error {
+func (s *Scheduler) persistScheduleState(ctx context.Context, jobKey, scheduleKey string, checkedAt time.Time, lastEnqueuedAt, nextRunAt string) error {
 	_, err := s.queries.SchedulerScheduleStateUpsert(ctx, db.SchedulerScheduleStateUpsertParams{
-		JobScheduleID:  jobScheduleID,
+		JobKey:         jobKey,
+		ScheduleKey:    scheduleKey,
 		LastCheckedAt:  checkedAt.Format(time.RFC3339Nano),
 		LastEnqueuedAt: strings.TrimSpace(lastEnqueuedAt),
 		NextRunAt:      strings.TrimSpace(nextRunAt),
@@ -279,7 +291,7 @@ func (s *Scheduler) upsertHeartbeat(ctx context.Context, heartbeatAt, tickStarte
 
 func (s *Scheduler) createScheduledRun(
 	ctx context.Context,
-	schedule db.SchedulerScheduleGetEnabledManyRow,
+	schedule runtimeSchedule,
 	scheduledFor time.Time,
 	triggeredBy string,
 ) (db.Run, error) {
@@ -364,6 +376,91 @@ func (s *Scheduler) createScheduledRun(
 		return db.Run{}, err
 	}
 	return run, nil
+}
+
+type runtimeSchedule struct {
+	JobID       int64
+	JobKey      string
+	ScheduleKey string
+	CronExpr    string
+	Timezone    string
+	Description string
+}
+
+func (s *Scheduler) currentSchedules(ctx context.Context) ([]runtimeSchedule, error) {
+	if s == nil || s.registry == nil {
+		return nil, nil
+	}
+	jobs := s.registry.Jobs()
+	schedules := make([]runtimeSchedule, 0)
+	for _, job := range jobs {
+		jobRow, err := s.queries.JobGetByKey(ctx, job.Key)
+		if err != nil {
+			return nil, fmt.Errorf("load job %s: %w", job.Key, err)
+		}
+		for _, schedule := range job.Schedules {
+			if !schedule.Enabled {
+				continue
+			}
+			timezone := strings.TrimSpace(schedule.Timezone)
+			if timezone == "" {
+				timezone = "UTC"
+			}
+			schedules = append(schedules, runtimeSchedule{
+				JobID:       jobRow.ID,
+				JobKey:      job.Key,
+				ScheduleKey: schedule.Key,
+				CronExpr:    schedule.CronExpr,
+				Timezone:    timezone,
+				Description: schedule.Description,
+			})
+		}
+	}
+	return schedules, nil
+}
+
+func (s *Scheduler) pruneInactiveScheduleRecords(ctx context.Context, schedules []runtimeSchedule) error {
+	active := make(map[string]struct{}, len(schedules))
+	for _, schedule := range schedules {
+		active[scheduleStateKey(schedule.JobKey, schedule.ScheduleKey)] = struct{}{}
+	}
+
+	states, err := s.queries.SchedulerScheduleStateGetMany(ctx)
+	if err != nil {
+		return err
+	}
+	for _, state := range states {
+		if _, ok := active[scheduleStateKey(state.JobKey, state.ScheduleKey)]; ok {
+			continue
+		}
+		if err := s.queries.SchedulerScheduleStateDeleteByJobKeyScheduleKey(ctx, db.SchedulerScheduleStateDeleteByJobKeyScheduleKeyParams{
+			JobKey:      state.JobKey,
+			ScheduleKey: state.ScheduleKey,
+		}); err != nil {
+			return err
+		}
+	}
+
+	runKeys, err := s.queries.SchedulerScheduleRunGetDistinctMany(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range runKeys {
+		if _, ok := active[scheduleStateKey(row.JobKey, row.ScheduleKey)]; ok {
+			continue
+		}
+		if err := s.queries.SchedulerScheduleRunsDeleteByJobKeyScheduleKey(ctx, db.SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams{
+			JobKey:      row.JobKey,
+			ScheduleKey: row.ScheduleKey,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scheduleStateKey(jobKey, scheduleKey string) string {
+	return jobKey + "\x00" + scheduleKey
 }
 
 func parseStoredTime(value string) time.Time {

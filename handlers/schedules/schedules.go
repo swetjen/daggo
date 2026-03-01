@@ -2,8 +2,8 @@ package schedules
 
 import (
 	"context"
+	"hash/fnv"
 
-	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
 )
@@ -39,34 +39,37 @@ type SchedulesGetManyResponse struct {
 }
 
 func (h *Handlers) SchedulesGetMany(ctx context.Context, req SchedulesGetManyRequest) (SchedulesGetManyResponse, int) {
+	_ = ctx
 	limit, offset := normalizePagination(req.Limit, req.Offset)
-	rows, err := h.app.DB.JobScheduleGetMany(ctx, db.JobScheduleGetManyParams{Limit: limit, Offset: offset})
-	if err != nil {
-		return SchedulesGetManyResponse{Error: "failed to load schedules"}, rpc.StatusError
-	}
-	total, err := h.app.DB.JobScheduleCount(ctx)
-	if err != nil {
-		return SchedulesGetManyResponse{Error: "failed to count schedules"}, rpc.StatusError
-	}
+	rows := currentSchedules(h.app)
+	total := int64(len(rows))
+	start := minInt(int(offset), len(rows))
+	end := minInt(start+int(limit), len(rows))
 	return SchedulesGetManyResponse{
-		Data:  toSchedules(rows),
+		Data:  rows[start:end],
 		Total: total,
 	}, rpc.StatusOK
 }
 
-func toSchedules(rows []db.JobScheduleGetManyRow) []Schedule {
-	out := make([]Schedule, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, Schedule{
-			ID:          row.ID,
-			JobID:       row.JobID,
-			JobKey:      row.JobKey,
-			ScheduleKey: row.ScheduleKey,
-			CronExpr:    row.CronExpr,
-			Timezone:    row.Timezone,
-			IsEnabled:   row.IsEnabled == 1,
-			Description: row.Description,
-		})
+func currentSchedules(app *deps.Deps) []Schedule {
+	if app == nil || app.Registry == nil {
+		return nil
+	}
+	jobs := app.Registry.Jobs()
+	out := make([]Schedule, 0)
+	for _, job := range jobs {
+		for _, schedule := range job.Schedules {
+			out = append(out, Schedule{
+				ID:          syntheticScheduleID(job.Key, schedule.Key),
+				JobID:       syntheticScheduleID(job.Key, "job"),
+				JobKey:      job.Key,
+				ScheduleKey: schedule.Key,
+				CronExpr:    schedule.CronExpr,
+				Timezone:    schedule.Timezone,
+				IsEnabled:   schedule.Enabled,
+				Description: schedule.Description,
+			})
+		}
 	}
 	return out
 }
@@ -82,4 +85,19 @@ func normalizePagination(limit, offset int64) (int64, int64) {
 		offset = 0
 	}
 	return limit, offset
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func syntheticScheduleID(jobKey, suffix string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(jobKey))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(suffix))
+	return int64(hasher.Sum64() & 0x7fffffffffffffff)
 }

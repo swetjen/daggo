@@ -7,7 +7,7 @@ import (
 	"github.com/swetjen/daggo/db"
 )
 
-func TestRegistrySyncToDBPrunesUnregisteredJobs(t *testing.T) {
+func TestRegistrySyncToDBRetainsUnregisteredJobs(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -39,26 +39,26 @@ func TestRegistrySyncToDBPrunesUnregisteredJobs(t *testing.T) {
 
 	before, err := queries.JobCount(ctx)
 	if err != nil {
-		t.Fatalf("job count before prune: %v", err)
+		t.Fatalf("job count before resync: %v", err)
 	}
 	if before != 2 {
-		t.Fatalf("expected 2 jobs before prune, got %d", before)
+		t.Fatalf("expected 2 jobs before resync, got %d", before)
 	}
 
 	next := NewRegistry()
 	next.MustRegister(jobA)
 	if err := next.SyncToDB(ctx, queries, pool); err != nil {
-		t.Fatalf("prune sync: %v", err)
+		t.Fatalf("resync: %v", err)
 	}
 
 	after, err := queries.JobCount(ctx)
 	if err != nil {
-		t.Fatalf("job count after prune: %v", err)
+		t.Fatalf("job count after resync: %v", err)
 	}
-	if after != 1 {
-		t.Fatalf("expected 1 job after prune, got %d", after)
+	if after != 2 {
+		t.Fatalf("expected 2 jobs after resync, got %d", after)
 	}
-	if _, err := queries.JobGetByKey(ctx, "job_b"); err == nil {
-		t.Fatalf("expected job_b to be pruned")
+	if _, err := queries.JobGetByKey(ctx, "job_b"); err != nil {
+		t.Fatalf("expected job_b to be retained: %v", err)
 	}
 }
