@@ -15,7 +15,7 @@ import (
 
 const defaultDSN = "file:daggo.sqlite?cache=shared&mode=rwc"
 
-//go:embed sql/schemas/*.sql
+//go:embed sql/sqlite/schemas/*.sql
 var schemaFS embed.FS
 
 func Open(ctx context.Context, dsn string) (*Queries, *sql.DB, error) {
@@ -55,7 +55,7 @@ func ensureSchema(ctx context.Context, conn *sql.DB) error {
 	if err := ensureMigrationsTable(ctx, conn); err != nil {
 		return err
 	}
-	paths, err := fs.Glob(schemaFS, "sql/schemas/*.sql")
+	paths, err := fs.Glob(schemaFS, "sql/sqlite/schemas/*.sql")
 	if err != nil {
 		return fmt.Errorf("list schemas: %w", err)
 	}

@@ -379,7 +379,7 @@ func (h *Handlers) createRunWithSteps(ctx context.Context, in createRunInput) (R
 	if err != nil {
 		return RunSummary{}, err
 	}
-	qtx := h.app.DB.WithTx(tx)
+	qtx := db.WithTx(h.app.DB, tx)
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	runKey := fmt.Sprintf("run_%d", time.Now().UTC().UnixNano())

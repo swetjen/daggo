@@ -1,11 +1,21 @@
 version: "2"
 sql:
   - engine: "sqlite"
-    schema: "schemas"
-    queries: "queries"
+    schema: "sqlite/schemas"
+    queries: "sqlite/queries"
     gen:
       go:
         package: "db"
         out: ".."
+        sql_package: "database/sql"
+        emit_json_tags: true
+
+  - engine: "postgresql"
+    schema: "postgres/schemas"
+    queries: "postgres/queries"
+    gen:
+      go:
+        package: "postgresgen"
+        out: "../postgresgen"
         sql_package: "database/sql"
         emit_json_tags: true

@@ -5,6 +5,7 @@ ERRORS
 runtime/
 .env
 .env.local
+.env.postgres.test.local
 .idea/
 frontend-web/dist/
 tmp/screens/

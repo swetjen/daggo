@@ -25,3 +25,18 @@ func TestPostgresConfigValidationRequiresConnectionFields(t *testing.T) {
 		t.Fatalf("expected postgres config validation to fail")
 	}
 }
+
+func TestLoadDoesNotEnablePostgresWithoutExplicitDriver(t *testing.T) {
+	t.Setenv("DAGGO_POSTGRES_HOST", "db.internal")
+	t.Setenv("DAGGO_POSTGRES_USER", "daggo")
+	t.Setenv("DAGGO_POSTGRES_DATABASE", "platform")
+	t.Setenv("DAGGO_POSTGRES_SCHEMA", "tenant_a")
+	t.Setenv("DAGGO_POSTGRES_PASSWORD", "secret")
+	t.Setenv("DAGGO_POSTGRES_PORT", "5432")
+
+	cfg := Load()
+
+	if cfg.Database.Driver != DatabaseDriverSQLite {
+		t.Fatalf("expected sqlite driver by default, got %q", cfg.Database.Driver)
+	}
+}

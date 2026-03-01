@@ -118,16 +118,6 @@ func Load() Config {
 	driver := strings.ToLower(strings.TrimSpace(getEnvAny([]string{"DAGGO_DATABASE_DRIVER", "DATABASE_DRIVER"}, "")))
 	if driver == "" {
 		switch {
-		case hasAnyEnv([]string{
-			"DAGGO_POSTGRES_HOST",
-			"DAGGO_POSTGRES_PORT",
-			"DAGGO_POSTGRES_USER",
-			"DAGGO_POSTGRES_PASSWORD",
-			"DAGGO_POSTGRES_DATABASE",
-			"DAGGO_POSTGRES_SCHEMA",
-			"DAGGO_POSTGRES_SSLMODE",
-		}):
-			driver = string(DatabaseDriverPostgres)
 		case sqlitePath != "" || sqliteDSN != "":
 			driver = string(DatabaseDriverSQLite)
 		default:
@@ -368,15 +358,6 @@ func cleanList(values []string) []string {
 		}
 	}
 	return out
-}
-
-func hasAnyEnv(keys []string) bool {
-	for _, key := range keys {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func hasSchedulerOverrides(cfg SchedulerConfig) bool {

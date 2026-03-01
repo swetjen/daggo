@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 
 	api "github.com/swetjen/daggo"
@@ -9,8 +8,8 @@ import (
 )
 
 func main() {
-	cfg := api.LoadConfigFromEnv()
-	queries, pool, err := db.OpenRuntime(context.Background(), cfg.Database)
+	cfg := api.DefaultConfig()
+	queries, pool, err := db.NewTest()
 	if err != nil {
 		log.Fatal(err)
 	}

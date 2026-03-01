@@ -13,7 +13,7 @@ import (
 // Deps contains shared runtime dependencies for handlers.
 type Deps struct {
 	Config     config.Config
-	DB         *db.Queries
+	DB         db.Store
 	Pool       *sql.DB
 	Registry   *dag.Registry
 	Executor   *dag.Executor
@@ -21,11 +21,11 @@ type Deps struct {
 	DeployLock *dag.DeployLock
 }
 
-func New(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB) (*Deps, error) {
+func New(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB) (*Deps, error) {
 	return NewWithRegistry(ctx, cfg, queries, pool, nil)
 }
 
-func NewWithRegistry(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (*Deps, error) {
+func NewWithRegistry(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (*Deps, error) {
 	cfg = cfg.Normalized()
 	if registry == nil {
 		registry = dag.NewRegistry()

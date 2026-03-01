@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/swetjen/daggo/db"
 	"github.com/robfig/cron/v3"
+	"github.com/swetjen/daggo/db"
 )
 
 type RunEnqueuer interface {
@@ -26,7 +26,7 @@ type SchedulerOptions struct {
 }
 
 type Scheduler struct {
-	queries  *db.Queries
+	queries  db.Store
 	pool     *sql.DB
 	enqueuer RunEnqueuer
 
@@ -40,7 +40,7 @@ type Scheduler struct {
 	deployLock *DeployLock
 }
 
-func NewScheduler(queries *db.Queries, pool *sql.DB, enqueuer RunEnqueuer, opts SchedulerOptions) *Scheduler {
+func NewScheduler(queries db.Store, pool *sql.DB, enqueuer RunEnqueuer, opts SchedulerOptions) *Scheduler {
 	tickInterval := opts.TickInterval
 	if tickInterval <= 0 {
 		tickInterval = 15 * time.Second
@@ -295,7 +295,7 @@ func (s *Scheduler) createScheduledRun(
 	if err != nil {
 		return db.Run{}, err
 	}
-	qtx := s.queries.WithTx(tx)
+	qtx := db.WithTx(s.queries, tx)
 
 	paramsBytes, _ := json.Marshal(map[string]any{
 		"scheduled_for": scheduledFor.UTC().Format(time.RFC3339Nano),

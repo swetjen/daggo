@@ -15,7 +15,7 @@ import (
 	"github.com/swetjen/virtuous/rpc"
 )
 
-func NewRouter(cfg config.Config, queries *db.Queries, pool *sql.DB) (http.Handler, error) {
+func NewRouter(cfg config.Config, queries db.Store, pool *sql.DB) (http.Handler, error) {
 	handler, _, err := NewRouterWithDeps(context.Background(), cfg, queries, pool)
 	if err != nil {
 		return nil, err
@@ -23,7 +23,7 @@ func NewRouter(cfg config.Config, queries *db.Queries, pool *sql.DB) (http.Handl
 	return handler, nil
 }
 
-func NewRouterWithRegistry(cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (http.Handler, error) {
+func NewRouterWithRegistry(cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (http.Handler, error) {
 	handler, _, err := NewRouterWithDepsAndRegistry(context.Background(), cfg, queries, pool, registry)
 	if err != nil {
 		return nil, err
@@ -31,11 +31,11 @@ func NewRouterWithRegistry(cfg config.Config, queries *db.Queries, pool *sql.DB,
 	return handler, nil
 }
 
-func NewRouterWithDeps(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB) (http.Handler, *deps.Deps, error) {
+func NewRouterWithDeps(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB) (http.Handler, *deps.Deps, error) {
 	return NewRouterWithDepsAndRegistry(ctx, cfg, queries, pool, nil)
 }
 
-func NewRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (http.Handler, *deps.Deps, error) {
+func NewRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (http.Handler, *deps.Deps, error) {
 	rpcRouter, application, err := BuildRouterWithDepsAndRegistry(ctx, cfg, queries, pool, registry)
 	if err != nil {
 		return nil, nil, err
@@ -55,21 +55,21 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 	return handler
 }
 
-func BuildRouter(cfg config.Config, queries *db.Queries, pool *sql.DB) (*rpc.Router, error) {
+func BuildRouter(cfg config.Config, queries db.Store, pool *sql.DB) (*rpc.Router, error) {
 	router, _, err := BuildRouterWithDeps(context.Background(), cfg, queries, pool)
 	return router, err
 }
 
-func BuildRouterWithRegistry(cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (*rpc.Router, error) {
+func BuildRouterWithRegistry(cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (*rpc.Router, error) {
 	router, _, err := BuildRouterWithDepsAndRegistry(context.Background(), cfg, queries, pool, registry)
 	return router, err
 }
 
-func BuildRouterWithDeps(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB) (*rpc.Router, *deps.Deps, error) {
+func BuildRouterWithDeps(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB) (*rpc.Router, *deps.Deps, error) {
 	return BuildRouterWithDepsAndRegistry(ctx, cfg, queries, pool, nil)
 }
 
-func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries *db.Queries, pool *sql.DB, registry *dag.Registry) (*rpc.Router, *deps.Deps, error) {
+func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (*rpc.Router, *deps.Deps, error) {
 	slog.Info("daggo: building rpc router", "prefix", "/rpc")
 	if ctx == nil {
 		ctx = context.Background()

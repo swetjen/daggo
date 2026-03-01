@@ -12,9 +12,10 @@ DAGGO is a Go-native workflow orchestrator for teams that want to define jobs in
 ## What You Get
 
 - Typed DAG authoring with build-time validation.
-- SQLite by default, with migrations applied automatically at startup.
+- SQLite by default, with automatic startup migrations.
+- Optional PostgreSQL support with automatic schema bootstrap and startup migrations.
 - Embedded web admin UI served by the same Go process.
-- RPC API plus generated client support.
+- RPC API with generated client support.
 - Background scheduling and async run execution.
 - Internal worker bootstrapping handled by DAGGO, so importing apps do not need to implement private subprocess commands.
 
@@ -178,7 +179,7 @@ cfg := daggo.DefaultConfig()
 cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 ```
 
-PostgreSQL is now part of the public config surface, but runtime support is intentionally not implemented yet.
+PostgreSQL is opt-in and only activates when the driver is explicitly set to `postgres`.
 
 ```go
 cfg := daggo.DefaultConfig()
@@ -189,9 +190,35 @@ cfg.Database.Postgres.User = "daggo"
 cfg.Database.Postgres.Password = "secret"
 cfg.Database.Postgres.Database = "platform"
 cfg.Database.Postgres.Schema = "customer_a_daggo"
+cfg.Database.Postgres.SSLMode = "require"
 ```
 
-The planned provisioning and migration model is documented in [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md).
+At startup, DAGGO will:
+
+1. connect to the configured PostgreSQL database
+2. create the configured schema if it does not exist
+3. set `search_path` so DAGGO uses that schema
+4. run embedded up-migrations automatically
+5. use PostgreSQL for jobs, runs, scheduler state, and events
+
+The PostgreSQL runtime details and remaining limitations are documented in [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md).
+
+#### PostgreSQL via Environment
+
+PostgreSQL is not auto-detected from env vars alone. Set the driver explicitly:
+
+```bash
+export DAGGO_DATABASE_DRIVER=postgres
+export DAGGO_POSTGRES_HOST=db.internal
+export DAGGO_POSTGRES_PORT=5432
+export DAGGO_POSTGRES_USER=daggo
+export DAGGO_POSTGRES_PASSWORD=secret
+export DAGGO_POSTGRES_DATABASE=platform
+export DAGGO_POSTGRES_SCHEMA=customer_a_daggo
+export DAGGO_POSTGRES_SSLMODE=require
+
+go run ./cmd/api
+```
 
 ## Local Development
 

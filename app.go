@@ -36,7 +36,7 @@ type App struct {
 	runtime  context.Context
 	cancel   context.CancelFunc
 	registry *dag.Registry
-	queries  *db.Queries
+	queries  db.Store
 	pool     *sql.DB
 	handler  http.Handler
 	server   *http.Server

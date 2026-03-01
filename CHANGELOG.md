@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-01
+- Released DAGGO as an importable Go runtime package with `daggo.Main`, `daggo.NewApp`, and public config.
+- Added explicit PostgreSQL runtime support with schema bootstrap and automatic startup migrations.
+- Split SQL/sqlc generation by engine and introduced a shared DB store boundary for SQLite and PostgreSQL.
+- Updated README and usage docs with SQLite and PostgreSQL startup instructions.
+
 ## 2026-02-22
 - Replaced the byodb sample domain with DAGGO orchestration primitives.
 - Added SQLite schema/queries for jobs, graph metadata, runs, steps, and events.

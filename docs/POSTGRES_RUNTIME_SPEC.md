@@ -1,21 +1,17 @@
-# PostgreSQL Runtime Spec
+# PostgreSQL Runtime
 
-This document captures the intended PostgreSQL runtime behavior for DAGGO. The config surface is exposed now, but the runtime implementation is intentionally deferred.
+This document covers how DAGGO uses PostgreSQL today.
 
-## Status
+## Summary
 
-- Public config exists today under `daggo.Config.Database.Postgres`.
-- Runtime support is not implemented yet.
-- Current startup returns a clear "not implemented yet" error when `DatabaseDriverPostgres` is selected.
+- PostgreSQL is supported.
+- SQLite is still the default.
+- PostgreSQL only activates when the driver is explicitly set to `postgres`.
+- DAGGO provisions into a user-provided schema inside a user-provided database.
 
-## Goals
+## Required Config
 
-- Let DAGGO users provide shared PostgreSQL infrastructure details.
-- Provision DAGGO objects into a dedicated schema instead of taking over an entire database.
-- Keep SQLite as the zero-config default for local and small deployments.
-- Preserve DAGGO's automatic startup flow: open DB, ensure schema, run migrations, serve UI, start scheduler.
-
-## Proposed User Config
+Code configuration:
 
 ```go
 cfg := daggo.DefaultConfig()
@@ -29,39 +25,69 @@ cfg.Database.Postgres.Schema = "customer_a_daggo"
 cfg.Database.Postgres.SSLMode = "require"
 ```
 
-## Provisioning Model
+Environment configuration:
 
-When PostgreSQL support lands, DAGGO should:
+```bash
+export DAGGO_DATABASE_DRIVER=postgres
+export DAGGO_POSTGRES_HOST=db.internal
+export DAGGO_POSTGRES_PORT=5432
+export DAGGO_POSTGRES_USER=daggo
+export DAGGO_POSTGRES_PASSWORD=secret
+export DAGGO_POSTGRES_DATABASE=platform
+export DAGGO_POSTGRES_SCHEMA=customer_a_daggo
+export DAGGO_POSTGRES_SSLMODE=require
+```
 
-1. Connect to the user-provided database.
-2. Create the target schema if it does not already exist.
-3. Set `search_path` so all DAGGO tables, indexes, and migration bookkeeping live inside that schema.
-4. Run DAGGO migrations into that schema.
-5. Leave the rest of the database untouched.
+## Startup Behavior
 
-## Migration Expectations
+When PostgreSQL is selected, DAGGO startup does the following:
 
-- DAGGO should maintain its own migration ledger table inside the DAGGO schema.
-- SQLite and PostgreSQL should share the same logical schema model, but migrations will need engine-specific SQL.
-- Startup should remain automatic: no separate migration command required for standard DAGGO boot.
+1. Connects to the configured PostgreSQL database.
+2. Creates the configured schema if it does not exist.
+3. Reconnects with `search_path` set to `<daggo_schema>,public`.
+4. Creates the DAGGO migration ledger table if needed.
+5. Runs embedded up-migrations automatically.
+6. Uses PostgreSQL for jobs, runs, scheduler state, and events.
 
-## Connection Behavior
+This means the caller owns:
 
-- One config block maps to one PostgreSQL database plus one DAGGO schema.
-- The caller owns database creation and credentials.
-- DAGGO owns schema bootstrap and migration within that database.
-- SSL mode should remain configurable because deployment environments vary.
+- the PostgreSQL server
+- the database
+- the credentials
 
-## Open Questions
+DAGGO owns:
 
-- Should DAGGO create the schema with a configurable naming convention when `Schema` is omitted, or should `Schema` remain required?
-- Do we want a single sqlc target for both SQLite and PostgreSQL, or a clean split once PostgreSQL SQL diverges?
-- Should DAGGO support a database URL form for PostgreSQL in addition to the structured fields?
-- What connection pool defaults make sense once DAGGO runs against a network database instead of a local SQLite file?
+- the DAGGO schema inside that database
+- DAGGO tables and indexes
+- DAGGO startup migrations
 
-## Non-Goals For The First Postgres Milestone
+## Important Constraints
 
-- Cross-database orchestration.
-- Multi-tenant schema fanout from one process.
-- Online schema diff tooling.
-- Automatic creation of PostgreSQL roles, databases, or extensions.
+- PostgreSQL is explicit opt-in. Setting PG env vars without `DAGGO_DATABASE_DRIVER=postgres` does not switch the runtime away from SQLite.
+- `Database.Postgres.Schema` is required.
+- DAGGO expects a simple PostgreSQL schema identifier and rejects invalid schema names.
+- DAGGO provisions inside one schema per config block; it does not manage multiple schemas from one runtime instance.
+
+## SQL / Codegen Layout
+
+The SQL and generated packages are split by engine:
+
+- SQLite SQL: `db/sql/sqlite`
+- PostgreSQL SQL: `db/sql/postgres`
+- SQLite generated package: `db`
+- PostgreSQL generated package: `db/postgresgen`
+
+Runtime code uses a common `db.Store` boundary so SQLite and PostgreSQL can share the rest of the DAGGO runtime.
+
+## Current Gaps
+
+- PostgreSQL integration tests are not in place yet.
+- There is not yet a PostgreSQL URL-style config field; the runtime currently uses structured connection fields.
+- Migration locking for concurrent startup is not implemented yet.
+- Connection pool tuning is still minimal.
+
+## Recommended Next Improvements
+
+1. Add disposable PostgreSQL integration tests covering migrations, job sync, run creation, and scheduler flows.
+2. Add migration locking so two DAGGO processes cannot race schema upgrades.
+3. Add optional PostgreSQL URL support if callers want to provide a single DSN instead of structured fields.

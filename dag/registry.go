@@ -72,7 +72,7 @@ func (r *Registry) Jobs() []JobDefinition {
 	return out
 }
 
-func (r *Registry) SyncToDB(ctx context.Context, queries *db.Queries, pool *sql.DB) error {
+func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB) error {
 	if r == nil {
 		return errors.New("registry is nil")
 	}
@@ -85,7 +85,7 @@ func (r *Registry) SyncToDB(ctx context.Context, queries *db.Queries, pool *sql.
 		if err != nil {
 			return err
 		}
-		txQueries := queries.WithTx(tx)
+		txQueries := db.WithTx(queries, tx)
 
 		jobRow, err := txQueries.JobUpsert(ctx, db.JobUpsertParams{
 			JobKey:            job.Key,

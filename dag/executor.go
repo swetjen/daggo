@@ -21,7 +21,7 @@ import (
 )
 
 type Executor struct {
-	queries  *db.Queries
+	queries  db.Store
 	pool     *sql.DB
 	registry *Registry
 
@@ -50,7 +50,7 @@ const (
 	ExecutionModeSubprocess = "subprocess"
 )
 
-func NewExecutor(queries *db.Queries, pool *sql.DB, registry *Registry, queueSize int) *Executor {
+func NewExecutor(queries db.Store, pool *sql.DB, registry *Registry, queueSize int) *Executor {
 	if queueSize <= 0 {
 		queueSize = 128
 	}

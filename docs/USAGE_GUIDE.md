@@ -75,7 +75,40 @@ cfg := daggo.DefaultConfig()
 cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
 ```
 
-PostgreSQL has a public config shape but is not implemented yet. The planned schema-provisioning approach lives in [docs/POSTGRES_RUNTIME_SPEC.md](POSTGRES_RUNTIME_SPEC.md).
+PostgreSQL is supported as an explicit opt-in mode.
+
+```go
+cfg := daggo.DefaultConfig()
+cfg.Database.Driver = daggo.DatabaseDriverPostgres
+cfg.Database.Postgres.Host = "db.internal"
+cfg.Database.Postgres.Port = 5432
+cfg.Database.Postgres.User = "daggo"
+cfg.Database.Postgres.Password = "secret"
+cfg.Database.Postgres.Database = "platform"
+cfg.Database.Postgres.Schema = "customer_a_daggo"
+cfg.Database.Postgres.SSLMode = "require"
+```
+
+Important behavior:
+
+- SQLite remains the default unless the driver is explicitly set to `postgres`.
+- DAGGO provisions into the configured PostgreSQL schema, not the whole database.
+- Startup creates the schema if needed and runs bundled up-migrations automatically.
+
+Environment example:
+
+```bash
+export DAGGO_DATABASE_DRIVER=postgres
+export DAGGO_POSTGRES_HOST=db.internal
+export DAGGO_POSTGRES_PORT=5432
+export DAGGO_POSTGRES_USER=daggo
+export DAGGO_POSTGRES_PASSWORD=secret
+export DAGGO_POSTGRES_DATABASE=platform
+export DAGGO_POSTGRES_SCHEMA=customer_a_daggo
+export DAGGO_POSTGRES_SSLMODE=require
+```
+
+More detail lives in [docs/POSTGRES_RUNTIME_SPEC.md](POSTGRES_RUNTIME_SPEC.md).
 
 ## Input Resolution
 
