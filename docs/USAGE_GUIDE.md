@@ -15,7 +15,7 @@ This guide covers the package-level runtime flow for importing DAGGO into anothe
 cfg := daggo.DefaultConfig()
 cfg.Admin.Port = "8080"
 cfg.DisableUI = false
-cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
+cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
 
 if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil {
 	log.Fatal(err)
@@ -25,7 +25,7 @@ if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(job)); err != nil
 `daggo.Main(...)` automatically:
 
 - opens the configured database
-- applies bundled migrations
+- applies bundled migrations automatically
 - syncs registered jobs into the metadata tables
 - serves the embedded admin UI
 - serves RPC docs under `/rpc/docs/`
@@ -50,6 +50,11 @@ myapp/
     customer_ops.go
   resources/
     deps.go
+    crud.go
+    openai.go
+    playwright.go
+    gemini.go
+    s3.go
 ```
 
 Recommended split:
@@ -68,24 +73,31 @@ Prefer passing dependencies into a struct and exposing step functions as methods
 package resources
 
 import (
-	"log/slog"
-	"net/http"
+	"context"
 
+	"github.com/openai/openai-go/v3"
+	"myapp/db"
 	"github.com/swetjen/daggo/resources/ollama"
 	playwrightresource "github.com/swetjen/daggo/resources/playwright"
 	"github.com/swetjen/daggo/resources/s3resource"
+	"google.golang.org/genai"
 )
 
+type ScrapeResult struct {
+	Body       string
+	StatusCode int
+}
+
 type Deps struct {
-	Logger *slog.Logger
-	HTTP   *http.Client
-	CRUD   any
+	CRUD *db.Queries
 
 	Playwright *playwrightresource.RemoteResource
 	S3         *s3resource.Resource
-	Gemini     *http.Client
-	OpenAPI    *http.Client
+	Gemini     *genai.Client
+	OpenAI     *openai.Client
 	Ollama     *ollama.Resource
+
+	Scraper func(ctx context.Context, targetURL string) (ScrapeResult, error)
 }
 ```
 
@@ -109,11 +121,30 @@ func NewMyOps(deps resources.Deps) *MyOps {
 	return &MyOps{deps: deps}
 }
 
-func (o *MyOps) ScrapePageOp(ctx context.Context, in dag.NoInput) (ScrapePageOutput, error) {
-	_ = ctx
-	_ = in
-	o.deps.Logger.Info("scraping page")
-	return ScrapePageOutput{}, nil
+func (o *MyOps) ScrapePageOp(ctx context.Context, input dag.NoInput) (ScrapePageOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return ScrapePageOutput{}, err
+	}
+
+	// Run some processing on the input.
+	result, err := o.deps.Scraper(ctx, o.scrapeTargetURL(input))
+	if err != nil {
+		return ScrapePageOutput{}, err
+	}
+
+	return ScrapePageOutput{
+		Body:       result.Body,
+		StatusCode: result.StatusCode,
+	}, nil
+}
+
+func (o *MyOps) scrapeTargetURL(dag.NoInput) string {
+	return "https://example.com"
+}
+
+type ScrapePageOutput struct {
+	Body       string
+	StatusCode int
 }
 ```
 
@@ -193,7 +224,7 @@ SQLite is the default and the recommended way to get started.
 
 ```go
 cfg := daggo.DefaultConfig()
-cfg.Database.SQLite.Path = "runtime/daggo.sqlite"
+cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
 ```
 
 PostgreSQL is supported as an explicit opt-in mode.
@@ -206,7 +237,7 @@ cfg.Database.Postgres.Port = 5432
 cfg.Database.Postgres.User = "daggo"
 cfg.Database.Postgres.Password = "secret"
 cfg.Database.Postgres.Database = "platform"
-cfg.Database.Postgres.Schema = "customer_a_daggo"
+cfg.Database.Postgres.Schema = "my_project"
 cfg.Database.Postgres.SSLMode = "require"
 ```
 
@@ -225,7 +256,7 @@ export DAGGO_POSTGRES_PORT=5432
 export DAGGO_POSTGRES_USER=daggo
 export DAGGO_POSTGRES_PASSWORD=secret
 export DAGGO_POSTGRES_DATABASE=platform
-export DAGGO_POSTGRES_SCHEMA=customer_a_daggo
+export DAGGO_POSTGRES_SCHEMA=my_project
 export DAGGO_POSTGRES_SSLMODE=require
 ```
 

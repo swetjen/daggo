@@ -9,8 +9,9 @@ import (
 )
 
 type ScrapePageOutput struct {
-	URL  string
-	HTML string
+	URL        string
+	Body       string
+	StatusCode int
 }
 
 type ExtractTitleInput struct {
@@ -55,41 +56,68 @@ func NewMyOps(deps resources.Deps) *MyOps {
 	return &MyOps{deps: deps}
 }
 
-func (o *MyOps) ScrapePageOp(_ context.Context, _ dag.NoInput) (ScrapePageOutput, error) {
-	if o.deps.Logger != nil {
-		o.deps.Logger.Info("scraping page")
+func (o *MyOps) ScrapePageOp(ctx context.Context, input dag.NoInput) (ScrapePageOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return ScrapePageOutput{}, err
 	}
+
+	// Run some processing on the input.
+	result, err := o.deps.Scraper(ctx, o.scrapeTargetURL(input))
+	if err != nil {
+		return ScrapePageOutput{}, err
+	}
+
 	return ScrapePageOutput{
-		URL:  "https://example.com/blog/daggo",
-		HTML: "<html><head><title>DAGGO</title></head><body>Daggo extracts entities and links.</body></html>",
+		URL:        "https://example.com/blog/daggo",
+		Body:       result.Body,
+		StatusCode: result.StatusCode,
 	}, nil
 }
 
-func (o *MyOps) ExtractTitleOp(_ context.Context, in ExtractTitleInput) (ExtractTitleOutput, error) {
-	_ = o
+func (o *MyOps) scrapeTargetURL(dag.NoInput) string {
+	return "https://example.com/blog/daggo"
+}
+
+func (o *MyOps) ExtractTitleOp(ctx context.Context, in ExtractTitleInput) (ExtractTitleOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return ExtractTitleOutput{}, err
+	}
 	title := "Untitled"
-	if strings.Contains(in.Page.HTML, "<title>DAGGO</title>") {
+	if strings.Contains(in.Page.Body, "<title>DAGGO</title>") {
 		title = "DAGGO"
 	}
 	return ExtractTitleOutput{Title: title}, nil
 }
 
-func (o *MyOps) ExtractEntitiesOp(_ context.Context, _ ExtractEntitiesInput) (ExtractEntitiesOutput, error) {
-	_ = o
-	return ExtractEntitiesOutput{Entities: []string{"Daggo", "SQLite", "Workflow"}}, nil
+func (o *MyOps) ExtractEntitiesOp(ctx context.Context, in ExtractEntitiesInput) (ExtractEntitiesOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return ExtractEntitiesOutput{}, err
+	}
+	entities := []string{"Daggo", "Workflow"}
+	if strings.Contains(in.Page.Body, "SQLite") {
+		entities = append(entities, "SQLite")
+	}
+	return ExtractEntitiesOutput{Entities: entities}, nil
 }
 
-func (o *MyOps) ExtractLinksOp(_ context.Context, in ExtractLinksInput) (ExtractLinksOutput, error) {
-	_ = o
+func (o *MyOps) ExtractLinksOp(ctx context.Context, in ExtractLinksInput) (ExtractLinksOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return ExtractLinksOutput{}, err
+	}
 	return ExtractLinksOutput{Links: []string{in.Page.URL, "https://example.com/docs/daggo"}}, nil
 }
 
-func (o *MyOps) UpsertIndexOp(_ context.Context, in UpsertIndexInput) (UpsertIndexOutput, error) {
-	_ = in.Title
-	_ = in.Entities
-	_ = in.Links
-	if o.deps.Logger != nil {
-		o.deps.Logger.Info("upserting search index")
+func (o *MyOps) UpsertIndexOp(ctx context.Context, in UpsertIndexInput) (UpsertIndexOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return UpsertIndexOutput{}, err
 	}
-	return UpsertIndexOutput{RecordsUpserted: 1}, nil
+
+	recordsUpserted := len(in.Entities.Entities) + len(in.Links.Links)
+	if in.Title.Title != "" {
+		recordsUpserted++
+	}
+	if recordsUpserted == 0 && o.deps.CRUD != nil {
+		recordsUpserted = 1
+	}
+	return UpsertIndexOutput{RecordsUpserted: recordsUpserted}, nil
 }

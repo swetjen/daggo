@@ -21,7 +21,7 @@ cfg.Database.Postgres.Port = 5432
 cfg.Database.Postgres.User = "daggo"
 cfg.Database.Postgres.Password = "secret"
 cfg.Database.Postgres.Database = "platform"
-cfg.Database.Postgres.Schema = "customer_a_daggo"
+cfg.Database.Postgres.Schema = "my_project"
 cfg.Database.Postgres.SSLMode = "require"
 ```
 
@@ -34,7 +34,7 @@ export DAGGO_POSTGRES_PORT=5432
 export DAGGO_POSTGRES_USER=daggo
 export DAGGO_POSTGRES_PASSWORD=secret
 export DAGGO_POSTGRES_DATABASE=platform
-export DAGGO_POSTGRES_SCHEMA=customer_a_daggo
+export DAGGO_POSTGRES_SCHEMA=my_project
 export DAGGO_POSTGRES_SSLMODE=require
 ```
 

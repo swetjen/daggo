@@ -17,8 +17,9 @@ func main() {
 
 	deps := resources.NewDeps()
 	myOps := ops.NewMyOps(deps)
+	myJobs := jobs.ContentIngestionJob(myOps)
 
-	if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(jobs.ContentIngestionJob(myOps))); err != nil {
+	if err := daggo.Main(context.Background(), cfg, daggo.WithJobs(myJobs)); err != nil {
 		log.Fatal(err)
 	}
 }
