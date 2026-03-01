@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -21,6 +24,9 @@ var schemaFS embed.FS
 func Open(ctx context.Context, dsn string) (*Queries, *sql.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		dsn = defaultDSN
+	}
+	if err := ensureSQLiteParentDir(dsn); err != nil {
+		return nil, nil, err
 	}
 
 	conn, err := sql.Open("sqlite", dsn)
@@ -117,4 +123,57 @@ func loadAppliedMigrations(ctx context.Context, conn *sql.DB) (map[string]bool, 
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 	return applied, nil
+}
+
+func ensureSQLiteParentDir(dsn string) error {
+	path, ok, err := sqliteFilePath(dsn)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	dir := filepath.Dir(path)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create sqlite parent dir %s: %w", dir, err)
+	}
+	return nil
+}
+
+func sqliteFilePath(dsn string) (string, bool, error) {
+	trimmed := strings.TrimSpace(dsn)
+	switch {
+	case trimmed == "", trimmed == ":memory:":
+		return "", false, nil
+	case strings.HasPrefix(trimmed, "file://"):
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return "", false, fmt.Errorf("parse sqlite dsn %q: %w", dsn, err)
+		}
+		if strings.EqualFold(parsed.Query().Get("mode"), "memory") || parsed.Path == "" || parsed.Path == "/:memory:" {
+			return "", false, nil
+		}
+		return parsed.Path, true, nil
+	case strings.HasPrefix(trimmed, "file:"):
+		filename := strings.TrimPrefix(trimmed, "file:")
+		path, query, _ := strings.Cut(filename, "?")
+		if strings.EqualFold(queryValue(query, "mode"), "memory") || path == "" || path == ":memory:" {
+			return "", false, nil
+		}
+		return path, true, nil
+	default:
+		return trimmed, true, nil
+	}
+}
+
+func queryValue(rawQuery string, key string) string {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return ""
+	}
+	return values.Get(key)
 }
