@@ -92,23 +92,45 @@ Each op follows a standard Go function shape:
 3. Named Go function or method ending in `Op`
 
 ```go
-type ExtractTitleInput struct {
+type AnalyzeTextInput struct {
 	Page ScrapePageOutput
 }
 
-type ExtractTitleOutput struct {
-	Title string
+type AnalyzeTextOutput struct {
+	VowelsCount     int
+	ConsonantsCount int
 }
 
-func (o *MyOps) ExtractTitleOp(ctx context.Context, in ExtractTitleInput) (ExtractTitleOutput, error) {
+func (o *MyOps) AnalyzeTextOp(ctx context.Context, in AnalyzeTextInput) (AnalyzeTextOutput, error) {
 	if err := ctx.Err(); err != nil {
-		return ExtractTitleOutput{}, err
+		return AnalyzeTextOutput{}, err
 	}
-	title := "Untitled"
-	if strings.Contains(in.Page.Body, "<title>DAGGO</title>") {
-		title = "DAGGO"
+
+	body := in.Page.Body
+
+	// Naively strip HTML tags.
+	// Good enough for demo purposes, not production-grade parsing.
+	tagRegex := regexp.MustCompile(`<[^>]*>`)
+	text := tagRegex.ReplaceAllString(body, "")
+
+	vowels := 0
+	consonants := 0
+
+	for _, r := range strings.ToLower(text) {
+		if r >= 'a' && r <= 'z' {
+			switch r {
+			case 'a', 'e', 'i', 'o', 'u':
+				vowels++
+			default:
+				consonants++
+			}
+		}
 	}
-	return ExtractTitleOutput{Title: title}, nil
+
+	return AnalyzeTextOutput{
+		VowelsCount:     vowels,
+		ConsonantsCount: consonants,
+	}, nil
 }
 ```
 
