@@ -1,6 +1,13 @@
 # Changelog
 
 ## 2026-03-01
+- Simplified the public runtime API to `daggo.Run(...)` and `daggo.Open(...)` as the only canonical startup paths for jobs.
+- Removed the old `daggo.Main(...)`, `daggo.NewApp(...)`, `daggo.WithJobs(...)`, and `daggo.WithRegistry(...)` entrypoints.
+- Added explicit advanced startup paths `daggo.RunRegistry(...)` and `daggo.OpenRegistry(...)` for registry-driven integration.
+- Added optional bearer-secret protection for `/rpc/` and `/rpc/docs/` via `cfg.Admin.SecretKey` / `DAGGO_ADMIN_SECRET_KEY`.
+- Updated generated RPC clients to send `Authorization: Bearer <secret>` when auth options are provided.
+- Documented the subprocess runner model, secure no-UI deployment mode, and the recommended `jobs/`, `ops/`, and `resources/` imported-app layout.
+- Refreshed the README with UI screenshots, a richer example job graph, and clearer ops/dependency examples.
 - Made `dag.ScheduleDefinition.Key` optional and derive readable schedule keys from cron expressions by default.
 - Moved current schedule source-of-truth to the in-memory startup registry instead of persisted `job_schedules` rows.
 - Persisted only scheduler runtime bookkeeping by `(job_key, schedule_key)` for dedupe and next-run tracking.
