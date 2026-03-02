@@ -97,6 +97,7 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 	router := rpc.NewRouter(rpc.WithPrefix("/rpc"))
 	handleRPC(router, handlerSet.Jobs.JobsGetMany, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobByKey, routeGuard)
+	handleRPC(router, handlerSet.Jobs.JobSchedulingUpdate, routeGuard)
 
 	handleRPC(router, handlerSet.Runs.RunCreate, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunRerunStepCreate, routeGuard)

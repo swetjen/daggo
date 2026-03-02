@@ -36,6 +36,7 @@ type Job = {
   display_name: string;
   description: string;
   default_params_json: string;
+  scheduling_paused: boolean;
   nodes: JobNode[];
   edges: JobEdge[];
   schedules: JobSchedule[];
@@ -97,6 +98,11 @@ type RunsListResponse = {
 
 type RunCreateResponse = {
   run?: RunSummary;
+  error?: string;
+};
+
+type JobSchedulingUpdateResponse = {
+  job?: Job;
   error?: string;
 };
 
@@ -279,6 +285,19 @@ function decodePathSegment(value: string): string {
   }
 }
 
+function schedulingStateForJob(job: Job): { label: string; tone: string } {
+  if (job.scheduling_paused) {
+    return { label: "schedules paused", tone: "failed" };
+  }
+  if (job.schedules.length === 0) {
+    return { label: "no schedules", tone: "pending" };
+  }
+  if (job.schedules.some((schedule) => schedule.is_enabled)) {
+    return { label: "schedules active", tone: "success" };
+  }
+  return { label: "schedules inactive", tone: "pending" };
+}
+
 export function App() {
   const api = useMemo(() => createClient(window.location.origin), []);
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
@@ -348,6 +367,7 @@ export function App() {
 
   const sortedRuns = useMemo(() => sortRunsByFreshness(allRuns), [allRuns]);
   const selectedJob = jobs.find((job) => job.job_key === selectedJobKey) ?? null;
+  const selectedJobSchedulingState = selectedJob ? schedulingStateForJob(selectedJob) : null;
   const enabledSchedulesByJob = useMemo(() => {
     const byJob: Record<string, ScheduleRow[]> = {};
     for (const schedule of scheduleRows ?? []) {
@@ -1307,6 +1327,26 @@ export function App() {
     }
   }
 
+  async function updateJobScheduling(schedulingPaused: boolean) {
+    if (!selectedJob) return;
+    try {
+      setLoading(true);
+      setError("");
+      const response = (await api.jobs.JobSchedulingUpdate({
+        job_key: selectedJob.job_key,
+        scheduling_paused: schedulingPaused,
+      })) as JobSchedulingUpdateResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      await Promise.all([refreshJobs(), refreshSchedules(), refreshAllRuns()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update scheduling state");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function rerunStep(stepKey: string) {
     if (!runDetail) return;
     try {
@@ -1709,6 +1749,7 @@ export function App() {
                     {jobs.map((job) => {
                       const latestRun = latestRunByJob[job.job_key];
                       const latestStatus = latestRun ? normalizeStatus(latestRun.status) : "pending";
+                      const schedulingState = schedulingStateForJob(job);
                       return (
                         <article key={job.job_key} className="job-item">
                           <button className="job-item-main" onClick={() => openJobDetail(job.job_key)}>
@@ -1717,6 +1758,7 @@ export function App() {
                             <div className="meta">{job.nodes.length} steps</div>
                           </button>
                           <div className="job-item-foot">
+                            <span className={`pill ${schedulingState.tone}`}>{schedulingState.label}</span>
                             <span className={`pill ${latestStatus}`}>{latestRun ? latestStatus : "never ran"}</span>
                             <small>{latestRun ? formatTs(latestRun.started_at || latestRun.queued_at) : "-"}</small>
                             <button className="ghost-btn tiny" onClick={() => openJobHistory(job.job_key)}>
@@ -1753,6 +1795,9 @@ export function App() {
                         <div className="job-header-primary">
                           <strong>{selectedJob.job_key}</strong>
                           <span className="run-job-chip">{selectedJob.display_name || selectedJob.job_key}</span>
+                          <span className={`pill ${selectedJobSchedulingState?.tone ?? "pending"}`}>
+                            {selectedJobSchedulingState?.label ?? "no schedules"}
+                          </span>
                         </div>
                         <p className="job-description">{selectedJob.description || "No job description."}</p>
                         <div className="job-header-meta">
@@ -1780,6 +1825,27 @@ export function App() {
                           </label>
                           <button disabled={loading} className="primary-btn" onClick={() => void launchRun()}>
                             {loading ? "Submitting..." : "Run Job"}
+                          </button>
+                          {selectedJob.scheduling_paused ? (
+                            <p className="muted">Scheduling is paused for this job, but manual runs are still allowed.</p>
+                          ) : null}
+                        </div>
+
+                        <div className="schedule-box inline-section job-control-card">
+                          <h4>Scheduling</h4>
+                          <p className="muted">
+                            {selectedJobSchedules.length === 0
+                              ? "This job has no schedules configured."
+                              : selectedJob.scheduling_paused
+                                ? "All future scheduled runs are paused until re-enabled. Manual runs still work."
+                                : "All configured schedules are currently active."}
+                          </p>
+                          <button
+                            disabled={loading || selectedJobSchedules.length === 0}
+                            className="ghost-btn"
+                            onClick={() => void updateJobScheduling(!selectedJob.scheduling_paused)}
+                          >
+                            {selectedJob.scheduling_paused ? "Resume Scheduling" : "Pause Scheduling"}
                           </button>
                         </div>
 

@@ -8,16 +8,22 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/swetjen/daggo/db"
 )
 
 type Registry struct {
-	jobs map[string]JobDefinition
+	mu                    sync.RWMutex
+	jobs                  map[string]JobDefinition
+	schedulingPausedByJob map[string]bool
 }
 
 func NewRegistry() *Registry {
-	return &Registry{jobs: make(map[string]JobDefinition)}
+	return &Registry{
+		jobs:                  make(map[string]JobDefinition),
+		schedulingPausedByJob: make(map[string]bool),
+	}
 }
 
 func (r *Registry) MustRegister(job JobDefinition) {
@@ -30,6 +36,8 @@ func (r *Registry) Register(job JobDefinition) error {
 	if r == nil {
 		return errors.New("registry is nil")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if job.Key == "" {
 		return errors.New("job key is required")
 	}
@@ -53,6 +61,8 @@ func (r *Registry) JobByKey(key string) (JobDefinition, bool) {
 	if r == nil {
 		return JobDefinition{}, false
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	job, ok := r.jobs[key]
 	return job, ok
 }
@@ -61,6 +71,8 @@ func (r *Registry) Jobs() []JobDefinition {
 	if r == nil {
 		return nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	keys := make([]string, 0, len(r.jobs))
 	for key := range r.jobs {
 		keys = append(keys, key)
@@ -71,6 +83,46 @@ func (r *Registry) Jobs() []JobDefinition {
 		out = append(out, r.jobs[key])
 	}
 	return out
+}
+
+func (r *Registry) JobSchedulingPaused(key string) (bool, bool) {
+	if r == nil {
+		return false, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return false, false
+	}
+	if _, ok := r.jobs[trimmed]; !ok {
+		return false, false
+	}
+	return r.schedulingPausedByJob[trimmed], true
+}
+
+func (r *Registry) SetJobSchedulingPaused(key string, paused bool) (JobDefinition, error) {
+	if r == nil {
+		return JobDefinition{}, errors.New("registry is nil")
+	}
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return JobDefinition{}, errors.New("job key is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	job, ok := r.jobs[trimmed]
+	if !ok {
+		return JobDefinition{}, fmt.Errorf("job %q not found", trimmed)
+	}
+	if paused {
+		r.schedulingPausedByJob[trimmed] = true
+	} else {
+		delete(r.schedulingPausedByJob, trimmed)
+	}
+	return job, nil
 }
 
 func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB) error {

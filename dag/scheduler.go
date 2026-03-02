@@ -394,6 +394,9 @@ func (s *Scheduler) currentSchedules(ctx context.Context) ([]runtimeSchedule, er
 	jobs := s.registry.Jobs()
 	schedules := make([]runtimeSchedule, 0)
 	for _, job := range jobs {
+		if paused, ok := s.registry.JobSchedulingPaused(job.Key); ok && paused {
+			continue
+		}
 		jobRow, err := s.queries.JobGetByKey(ctx, job.Key)
 		if err != nil {
 			return nil, fmt.Errorf("load job %s: %w", job.Key, err)

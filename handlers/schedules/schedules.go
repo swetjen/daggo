@@ -58,6 +58,7 @@ func currentSchedules(app *deps.Deps) []Schedule {
 	jobs := app.Registry.Jobs()
 	out := make([]Schedule, 0)
 	for _, job := range jobs {
+		paused, _ := app.Registry.JobSchedulingPaused(job.Key)
 		for _, schedule := range job.Schedules {
 			out = append(out, Schedule{
 				ID:          syntheticScheduleID(job.Key, schedule.Key),
@@ -66,7 +67,7 @@ func currentSchedules(app *deps.Deps) []Schedule {
 				ScheduleKey: schedule.Key,
 				CronExpr:    schedule.CronExpr,
 				Timezone:    schedule.Timezone,
-				IsEnabled:   schedule.Enabled,
+				IsEnabled:   !paused && schedule.Enabled,
 				Description: schedule.Description,
 			})
 		}

@@ -361,6 +361,89 @@ func TestSchedulerRunTick_PrunesRemovedSchedulesButPreservesRuns(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunTick_PrunesPausedJobSchedulesButPreservesRuns(t *testing.T) {
+	ctx := context.Background()
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	source := Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+		return schedulerSourceOutput{Value: 1}, nil
+	})
+
+	job := NewJob("scheduler_job_scheduling_paused").
+		Add(source).
+		AddSchedule(ScheduleDefinition{
+			Key:      "every_minute",
+			CronExpr: "* * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		MustBuild()
+
+	registry := NewRegistry()
+	if err := registry.Register(job); err != nil {
+		t.Fatalf("register job: %v", err)
+	}
+	if err := registry.SyncToDB(ctx, queries, pool); err != nil {
+		t.Fatalf("sync registry: %v", err)
+	}
+
+	now := time.Date(2026, time.February, 23, 20, 2, 2, 0, time.UTC)
+	enqueuer := &recordingEnqueuer{}
+	scheduler := NewScheduler(queries, pool, enqueuer, SchedulerOptions{
+		SchedulerKey:  "test-scheduler-scheduling-paused",
+		TickInterval:  15 * time.Second,
+		MaxDuePerTick: 4,
+		Registry:      registry,
+	})
+	scheduler.nowFn = func() time.Time { return now }
+	scheduler.runTick(ctx)
+
+	runRows, err := queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs after initial tick: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected one historical run before scheduling pause, got %d", len(runRows))
+	}
+
+	if _, err := registry.SetJobSchedulingPaused(job.Key, true); err != nil {
+		t.Fatalf("pause scheduling: %v", err)
+	}
+
+	scheduler.nowFn = func() time.Time { return now.Add(2 * time.Minute) }
+	scheduler.runTick(ctx)
+
+	runRows, err = queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs after scheduling pause: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected historical run to be preserved after scheduling pause, got %d", len(runRows))
+	}
+
+	states, err := queries.SchedulerScheduleStateGetMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler states after scheduling pause: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("expected scheduler state to be pruned after scheduling pause, got %d", len(states))
+	}
+
+	claims, err := queries.SchedulerScheduleRunGetDistinctMany(ctx)
+	if err != nil {
+		t.Fatalf("load scheduler claims after scheduling pause: %v", err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("expected scheduler claims to be pruned after scheduling pause, got %d", len(claims))
+	}
+}
+
 func TestSchedulerRunTick_DoesNotBackfillBurst(t *testing.T) {
 	ctx := context.Background()
 	queries, pool, err := db.NewTest()

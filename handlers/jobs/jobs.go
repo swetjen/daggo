@@ -52,6 +52,7 @@ type Job struct {
 	DisplayName       string        `json:"display_name"`
 	Description       string        `json:"description"`
 	DefaultParamsJSON string        `json:"default_params_json"`
+	SchedulingPaused  bool          `json:"scheduling_paused"`
 	Nodes             []JobNode     `json:"nodes"`
 	Edges             []JobEdge     `json:"edges"`
 	Schedules         []JobSchedule `json:"schedules"`
@@ -68,6 +69,16 @@ type JobByKeyRequest struct {
 }
 
 type JobByKeyResponse struct {
+	Job   Job    `json:"job"`
+	Error string `json:"error,omitempty"`
+}
+
+type JobSchedulingUpdateRequest struct {
+	JobKey           string `json:"job_key"`
+	SchedulingPaused bool   `json:"scheduling_paused"`
+}
+
+type JobSchedulingUpdateResponse struct {
 	Job   Job    `json:"job"`
 	Error string `json:"error,omitempty"`
 }
@@ -102,6 +113,21 @@ func (h *Handlers) JobByKey(ctx context.Context, req JobByKeyRequest) (JobByKeyR
 	return JobByKeyResponse{Job: job}, rpc.StatusOK
 }
 
+func (h *Handlers) JobSchedulingUpdate(ctx context.Context, req JobSchedulingUpdateRequest) (JobSchedulingUpdateResponse, int) {
+	definition, err := setCurrentJobSchedulingPaused(h.app, req.JobKey, req.SchedulingPaused)
+	if err != nil {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found") {
+			return JobSchedulingUpdateResponse{Error: err.Error()}, rpc.StatusInvalid
+		}
+		return JobSchedulingUpdateResponse{Error: "failed to update scheduling state"}, rpc.StatusError
+	}
+	job, err := h.loadCurrentJob(ctx, definition)
+	if err != nil {
+		return JobSchedulingUpdateResponse{Error: "failed to load job"}, rpc.StatusError
+	}
+	return JobSchedulingUpdateResponse{Job: job}, rpc.StatusOK
+}
+
 func (h *Handlers) loadCurrentJob(ctx context.Context, definition dag.JobDefinition) (Job, error) {
 	row, err := h.app.DB.JobGetByKey(ctx, definition.Key)
 	if err != nil {
@@ -110,15 +136,17 @@ func (h *Handlers) loadCurrentJob(ctx context.Context, definition dag.JobDefinit
 		}
 		row = db.Job{}
 	}
+	schedulingPaused := currentJobSchedulingPaused(h.app, definition.Key)
 	return Job{
 		ID:                row.ID,
 		JobKey:            definition.Key,
 		DisplayName:       definition.DisplayName,
 		Description:       definition.Description,
 		DefaultParamsJSON: definition.DefaultParamsJSON,
+		SchedulingPaused:  schedulingPaused,
 		Nodes:             toJobNodes(definition.Steps),
 		Edges:             toJobEdges(definition.Steps),
-		Schedules:         toJobSchedules(definition.Schedules),
+		Schedules:         toJobSchedules(schedulingPaused, definition.Schedules),
 	}, nil
 }
 
@@ -146,14 +174,14 @@ func toJobEdges(steps []dag.StepDefinition) []JobEdge {
 	return out
 }
 
-func toJobSchedules(rows []dag.ScheduleDefinition) []JobSchedule {
+func toJobSchedules(schedulingPaused bool, rows []dag.ScheduleDefinition) []JobSchedule {
 	out := make([]JobSchedule, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, JobSchedule{
 			ScheduleKey: row.Key,
 			CronExpr:    row.CronExpr,
 			Timezone:    row.Timezone,
-			IsEnabled:   row.Enabled,
+			IsEnabled:   !schedulingPaused && row.Enabled,
 			Description: row.Description,
 		})
 	}
@@ -176,6 +204,25 @@ func currentJobByKey(app *deps.Deps, jobKey string) (dag.JobDefinition, bool) {
 		return dag.JobDefinition{}, false
 	}
 	return app.Registry.JobByKey(trimmed)
+}
+
+func currentJobSchedulingPaused(app *deps.Deps, jobKey string) bool {
+	if app == nil || app.Registry == nil {
+		return false
+	}
+	paused, ok := app.Registry.JobSchedulingPaused(jobKey)
+	return ok && paused
+}
+
+func setCurrentJobSchedulingPaused(app *deps.Deps, jobKey string, paused bool) (dag.JobDefinition, error) {
+	if app == nil || app.Registry == nil {
+		return dag.JobDefinition{}, errors.New("job registry is unavailable")
+	}
+	trimmed := strings.TrimSpace(jobKey)
+	if trimmed == "" {
+		return dag.JobDefinition{}, errors.New("job_key is required")
+	}
+	return app.Registry.SetJobSchedulingPaused(trimmed, paused)
 }
 
 func minInt(left, right int) int {
