@@ -32,6 +32,9 @@ func TestRuntimeRouterServesDocsButNotGeneratedClientRoutes(t *testing.T) {
 	if docsRec.Code != http.StatusOK {
 		t.Fatalf("expected docs status 200, got %d", docsRec.Code)
 	}
+	if !strings.Contains(docsRec.Body.String(), "DAGGO RPC Docs") {
+		t.Fatalf("expected custom docs shell title, got %q", docsRec.Body.String())
+	}
 
 	clientReq := httptest.NewRequest(http.MethodGet, "/rpc/client.gen.js", nil)
 	clientRec := httptest.NewRecorder()

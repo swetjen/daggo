@@ -48,7 +48,25 @@ func NewRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, querie
 func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 	cfg = cfg.Normalized()
 	mux := http.NewServeMux()
-	mux.Handle("/rpc/", guardRPCHandler(cfg, rpcRouter))
+	guardedRPC := guardRPCHandler(cfg, rpcRouter)
+	mux.Handle("/rpc/docs", guardRPCHandler(cfg, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/rpc/docs/", http.StatusMovedPermanently)
+	})))
+	mux.Handle("/rpc/docs/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/rpc/docs/" {
+			if req.Method != http.MethodGet {
+				http.NotFound(w, req)
+				return
+			}
+			guardRPCHandler(cfg, http.HandlerFunc(func(innerW http.ResponseWriter, innerReq *http.Request) {
+				innerW.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = innerW.Write([]byte(rpcDocsHTML))
+			})).ServeHTTP(w, req)
+			return
+		}
+		guardedRPC.ServeHTTP(w, req)
+	}))
+	mux.Handle("/rpc/", guardedRPC)
 	if !cfg.DisableUI {
 		mux.Handle("/", embedAndServeReact())
 	}
