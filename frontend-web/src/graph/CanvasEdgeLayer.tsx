@@ -15,8 +15,8 @@ type CanvasEdgeLayerProps = {
   showGrid?: boolean;
 };
 
-const EDGE_COLOR = "#879b92";
-const EDGE_HIGHLIGHT_COLOR = "#456f61";
+const EDGE_COLOR = "#344055";
+const EDGE_HIGHLIGHT_COLOR = "#60789a";
 
 export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
   const {
@@ -162,7 +162,7 @@ function drawGrid(context: CanvasRenderingContext2D, width: number, height: numb
     context.beginPath();
     context.moveTo(Math.round(screen.x) + 0.5, 0);
     context.lineTo(Math.round(screen.x) + 0.5, height);
-    context.strokeStyle = major ? "rgba(112, 130, 120, 0.10)" : "rgba(112, 130, 120, 0.05)";
+    context.strokeStyle = major ? "rgba(52, 64, 85, 0.24)" : "rgba(52, 64, 85, 0.12)";
     context.stroke();
   }
 
@@ -172,7 +172,7 @@ function drawGrid(context: CanvasRenderingContext2D, width: number, height: numb
     context.beginPath();
     context.moveTo(0, Math.round(screen.y) + 0.5);
     context.lineTo(width, Math.round(screen.y) + 0.5);
-    context.strokeStyle = major ? "rgba(112, 130, 120, 0.10)" : "rgba(112, 130, 120, 0.05)";
+    context.strokeStyle = major ? "rgba(52, 64, 85, 0.24)" : "rgba(52, 64, 85, 0.12)";
     context.stroke();
   }
 
