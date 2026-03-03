@@ -2345,7 +2345,7 @@ export function App() {
                                 const normalizedStatus = normalizeStatus(stepStatusByKey[node.step_key] ?? "pending");
                                 const step = runStepByKey[node.step_key];
                                 const stepMeta = [
-                                  step && step.duration_ms > 0 ? `${step.duration_ms} ms` : "",
+                                  step && step.duration_ms > 0 ? formatDurationMsLargest(step.duration_ms) : "",
                                   step && step.attempt > 1 ? `attempt ${step.attempt}` : "",
                                 ]
                                   .filter(Boolean)
@@ -2581,6 +2581,30 @@ function parseTimestamp(value: string): number {
     return 0;
   }
   return date.getTime();
+}
+
+function formatDurationMsLargest(ms: number): string {
+  if (ms <= 0) {
+    return "";
+  }
+  if (ms < 1000) {
+    return `${Math.ceil(ms)}ms`;
+  }
+
+  const totalSeconds = Math.ceil(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  return `${totalMinutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function runDurationLabel(run: RunSummary): string {
