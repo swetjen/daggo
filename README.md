@@ -80,6 +80,11 @@ func ContentIngestionJob(myOps *ops.MyOps) dag.JobDefinition {
 
 	return dag.NewJob("content_ingestion").
 		Add(scrapePage, extractTitle, extractEntities, extractLinks, upsertIndex).
+		AddSchedule(dag.ScheduleDefinition{
+			CronExpr: "*/15 * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
 		MustBuild()
 }
 ```
@@ -206,11 +211,6 @@ import (
 	"github.com/swetjen/daggo/resources/s3resource"
 	"google.golang.org/genai"
 )
-
-type ScrapeResult struct {
-	Body       string
-	StatusCode int
-}
 
 type Deps struct {
 	CRUD *db.Queries
