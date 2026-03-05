@@ -4,7 +4,6 @@ import {
   fitViewportToWorldRect,
   GRAPH_MAX_ZOOM,
   GRAPH_MIN_ZOOM,
-  screenToWorld,
   viewportPanFromScreenDelta,
   zoomDeltaToScaleFactor,
   zoomViewportAtScreenPoint,
@@ -36,16 +35,6 @@ type DagGraphCanvasHtmlProps = {
 type SurfaceSize = {
   width: number;
   height: number;
-};
-
-type DragState = {
-  pointerId: number;
-  nodeId: string;
-  startNodeX: number;
-  startNodeY: number;
-  startWorldX: number;
-  startWorldY: number;
-  moved: boolean;
 };
 
 type PanState = {
@@ -82,8 +71,6 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
   const [draggedNodePositionById, setDraggedNodePositionById] = useState<Record<string, { x: number; y: number }>>({});
 
   const panStateRef = useRef<PanState | null>(null);
-  const dragStateRef = useRef<DragState | null>(null);
-  const suppressClickNodeIdRef = useRef<string>("");
 
   useEffect(() => {
     const surface = surfaceRef.current;
@@ -206,34 +193,12 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
     [viewport.tx, viewport.ty],
   );
 
-  const handleNodePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>, node: DagNodeModel) => {
-      if (event.button !== 0) {
-        return;
-      }
-      event.stopPropagation();
-      const surface = surfaceRef.current;
-      if (!surface) {
-        return;
-      }
-
-      const surfacePoint = surfacePointFromClient(event.clientX, event.clientY);
-      const worldPoint = screenToWorld(viewport, surfacePoint);
-      const position = draggedNodePositionById[node.id] ?? { x: node.x, y: node.y };
-
-      surface.setPointerCapture(event.pointerId);
-      dragStateRef.current = {
-        pointerId: event.pointerId,
-        nodeId: node.id,
-        startNodeX: position.x,
-        startNodeY: position.y,
-        startWorldX: worldPoint.x,
-        startWorldY: worldPoint.y,
-        moved: false,
-      };
-    },
-    [draggedNodePositionById, surfacePointFromClient, viewport],
-  );
+  const handleNodePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+  }, []);
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -246,31 +211,9 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
           ty: panState.startTy + dy,
           scale: viewport.scale,
         });
-        return;
       }
-
-      const dragState = dragStateRef.current;
-      if (!dragState || dragState.pointerId !== event.pointerId) {
-        return;
-      }
-
-      const surfacePoint = surfacePointFromClient(event.clientX, event.clientY);
-      const worldPoint = screenToWorld(viewport, surfacePoint);
-      const dx = worldPoint.x - dragState.startWorldX;
-      const dy = worldPoint.y - dragState.startWorldY;
-      if (Math.abs(dx) > 0.75 || Math.abs(dy) > 0.75) {
-        dragState.moved = true;
-      }
-
-      setDraggedNodePositionById((current) => ({
-        ...current,
-        [dragState.nodeId]: {
-          x: dragState.startNodeX + dx,
-          y: dragState.startNodeY + dy,
-        },
-      }));
     },
-    [surfacePointFromClient, viewport],
+    [viewport.scale],
   );
 
   const clearPointerState = useCallback((pointerId: number) => {
@@ -283,48 +226,42 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
     if (panState?.pointerId === pointerId) {
       panStateRef.current = null;
     }
-
-    const dragState = dragStateRef.current;
-    if (dragState?.pointerId === pointerId) {
-      if (dragState.moved) {
-        suppressClickNodeIdRef.current = dragState.nodeId;
-      }
-      dragStateRef.current = null;
-    }
   }, []);
 
-  const handleNodeClick = useCallback(
-    (node: DagNodeModel) => {
-      if (suppressClickNodeIdRef.current === node.id) {
-        suppressClickNodeIdRef.current = "";
-        return;
-      }
-      onNodeClick?.(node);
-    },
-    [onNodeClick],
-  );
+  const handleNodeClick = useCallback((node: DagNodeModel) => onNodeClick?.(node), [onNodeClick]);
 
   const handleSurfaceWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
       event.preventDefault();
+      event.stopPropagation();
       if (surfaceSize.width <= 0 || surfaceSize.height <= 0) {
         return;
       }
-      const local = surfacePointFromClient(event.clientX, event.clientY);
-      const factor = zoomDeltaToScaleFactor(event.deltaY);
-      setViewport((current) =>
-        zoomViewportAtScreenPoint({
-          viewport: current,
-          nextScale: current.scale * factor,
-          screenX: local.x,
-          screenY: local.y,
-          minZoom: GRAPH_MIN_ZOOM,
-          maxZoom: GRAPH_MAX_ZOOM,
-        }),
-      );
+      const wantsZoom = event.ctrlKey || event.altKey || event.metaKey;
+      if (wantsZoom) {
+        const local = surfacePointFromClient(event.clientX, event.clientY);
+        const factor = zoomDeltaToScaleFactor(event.deltaY);
+        setViewport((current) =>
+          zoomViewportAtScreenPoint({
+            viewport: current,
+            nextScale: current.scale * factor,
+            screenX: local.x,
+            screenY: local.y,
+            minZoom: GRAPH_MIN_ZOOM,
+            maxZoom: GRAPH_MAX_ZOOM,
+          }),
+        );
+        return;
+      }
+      setViewport((current) => viewportPanFromScreenDelta(current, -event.deltaX, -event.deltaY));
     },
     [surfacePointFromClient, surfaceSize.height, surfaceSize.width],
   );
+
+  const handleWheelCapture = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
 
   const panActive = panStateRef.current !== null;
 
@@ -346,14 +283,8 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
   }
 
   return (
-    <div className="dag-canvas-html-root">
+    <div className="dag-canvas-html-root" onWheelCapture={handleWheelCapture}>
       <div className="dag-camera-controls">
-        <button className="ghost-btn tiny" onClick={() => setViewport((current) => viewportPanFromScreenDelta(current, 24, 0))}>
-          Pan →
-        </button>
-        <button className="ghost-btn tiny" onClick={() => setViewport((current) => viewportPanFromScreenDelta(current, -24, 0))}>
-          Pan ←
-        </button>
         <button
           className="ghost-btn tiny"
           onClick={() =>

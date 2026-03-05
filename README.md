@@ -15,7 +15,7 @@ The embedded UI is intended to be usable immediately in an imported app: overvie
 
 ![DAGGO overview timeline](docs/daggo-overview.png)
 
-The job detail view shows the DAG shape, configured schedules, and launch controls.
+The job detail view shows the DAG shape, an `Enabled` scheduling toggle, and tabbed `Overview`/`Runs` panels with inline run launch.
 
 ![DAGGO job detail graph](docs/daggo-job.png)
 

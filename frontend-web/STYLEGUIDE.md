@@ -16,9 +16,11 @@ import { createClient } from "./api/client.gen.js";
 - Do not hand-roll fetch helpers unless the client is missing a route.
 
 ## UI Patterns
-- Keep the landing hero intact; add new panels under the feature sections.
-- Use the existing layout primitives: `.panel`, `.states-grid`, `.pill`, `.btn`.
-- Prefer lightweight tables for list views.
+- Follow `docs/DAGGO_DESIGN_SYSTEM_V2.xml` (Operational Precision).
+- Keep hierarchy driven by layered dark surfaces, borders, and compact spacing.
+- Use state accent colors only for runtime/severity (`success`, `error`, `running`, `queued`).
+- Avoid Memoria-only effects (BorderBeam, ProgressiveBlur theatrics, 3D glare, starfields).
+- Prefer lightweight, dense tables and split panels for list/detail workflows.
 
 ## Build & Embed
 - After frontend changes: run `make gen-web`.

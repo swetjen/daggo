@@ -182,6 +182,7 @@ type RunsQuickFilter = "all" | "backfills" | "queued" | "in_progress" | "failed"
 type RunsSort = "newest" | "oldest" | "duration_desc";
 type RunStepGroupKey = "preparing" | "executing" | "failed" | "succeeded" | "not_executed";
 type EventStreamFilter = "all" | "stdout" | "stderr";
+type JobDetailTab = "overview" | "runs";
 
 const RUNS_QUICK_FILTER_ITEMS: { key: RunsQuickFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -285,19 +286,6 @@ function decodePathSegment(value: string): string {
   }
 }
 
-function schedulingStateForJob(job: Job): { label: string; tone: string } {
-  if (job.scheduling_paused) {
-    return { label: "schedules paused", tone: "failed" };
-  }
-  if (job.schedules.length === 0) {
-    return { label: "no schedules", tone: "pending" };
-  }
-  if (job.schedules.some((schedule) => schedule.is_enabled)) {
-    return { label: "schedules active", tone: "success" };
-  }
-  return { label: "schedules inactive", tone: "pending" };
-}
-
 export function App() {
   const api = useMemo(() => createClient(window.location.origin), []);
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
@@ -322,9 +310,9 @@ export function App() {
   const [runEventsTotal, setRunEventsTotal] = useState(0);
   const [runEventsBusy, setRunEventsBusy] = useState(false);
   const [selectedNodeKey, setSelectedNodeKey] = useState<string>("");
-  const [jobGraphSearch, setJobGraphSearch] = useState("");
+  const [runLaunchBusy, setRunLaunchBusy] = useState(false);
+  const [scheduleUpdatePendingByKey, setScheduleUpdatePendingByKey] = useState<Record<string, boolean>>({});
 
-  const [launchNote, setLaunchNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -336,6 +324,8 @@ export function App() {
   const timelineTooltipTimerRef = useRef<number | null>(null);
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   const [timelineTooltip, setTimelineTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const runEventsViewportRef = useRef<HTMLDivElement | null>(null);
+  const runEventsScrollToBottomPendingRef = useRef(false);
   const [refreshClockMs, setRefreshClockMs] = useState(() => Date.now());
   const [nextAutoRefreshAtMs, setNextAutoRefreshAtMs] = useState(() => Date.now() + RUNS_POLL_INTERVAL_MS);
   const [lastRefreshAtMs, setLastRefreshAtMs] = useState(0);
@@ -349,15 +339,13 @@ export function App() {
   const [runsQuickFilter, setRunsQuickFilter] = useState<RunsQuickFilter>("all");
   const [runsSort, setRunsSort] = useState<RunsSort>("newest");
   const [runsPageIndex, setRunsPageIndex] = useState(0);
-  const [selectedRunKeys, setSelectedRunKeys] = useState<string[]>([]);
-  const [runsActionKey, setRunsActionKey] = useState("");
 
-  const [runGraphSearch, setRunGraphSearch] = useState("");
   const [runHideUnexecuted, setRunHideUnexecuted] = useState(false);
   const [runSelectedStepKey, setRunSelectedStepKey] = useState("");
   const [runHoveredStepKey, setRunHoveredStepKey] = useState("");
   const [runStepGroupFilter, setRunStepGroupFilter] = useState<RunStepGroupKey | "all">("all");
   const [collapsedRunGroups, setCollapsedRunGroups] = useState<RunStepGroupKey[]>([]);
+  const [jobDetailTab, setJobDetailTab] = useState<JobDetailTab>("overview");
 
   const [runEventLevelFilter, setRunEventLevelFilter] = useState("all");
   const [runEventStreamFilter, setRunEventStreamFilter] = useState<EventStreamFilter>("all");
@@ -367,7 +355,15 @@ export function App() {
 
   const sortedRuns = useMemo(() => sortRunsByFreshness(allRuns), [allRuns]);
   const selectedJob = jobs.find((job) => job.job_key === selectedJobKey) ?? null;
-  const selectedJobSchedulingState = selectedJob ? schedulingStateForJob(selectedJob) : null;
+  const scheduleRowsByJob = useMemo(() => {
+    const byJob: Record<string, ScheduleRow[]> = {};
+    for (const schedule of scheduleRows ?? []) {
+      const rows = byJob[schedule.job_key] ?? [];
+      rows.push(schedule);
+      byJob[schedule.job_key] = rows;
+    }
+    return byJob;
+  }, [scheduleRows]);
   const enabledSchedulesByJob = useMemo(() => {
     const byJob: Record<string, ScheduleRow[]> = {};
     for (const schedule of scheduleRows ?? []) {
@@ -413,20 +409,13 @@ export function App() {
       }),
     [selectedJob, stepStatusByKey],
   );
-  const jobGraphQuery = jobGraphSearch.trim().toLowerCase();
   const jobVisibleStepKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const node of dagLayout.nodes) {
-      if (jobGraphQuery) {
-        const label = `${node.step_key} ${node.display_name || ""}`.toLowerCase();
-        if (!label.includes(jobGraphQuery)) {
-          continue;
-        }
-      }
       keys.add(node.step_key);
     }
     return keys;
-  }, [dagLayout.nodes, jobGraphQuery]);
+  }, [dagLayout.nodes]);
   const jobVisibleNodes = useMemo(
     () => dagLayout.nodes.filter((node) => jobVisibleStepKeys.has(node.step_key)),
     [dagLayout.nodes, jobVisibleStepKeys],
@@ -436,8 +425,8 @@ export function App() {
     [dagLayout.edges, jobVisibleStepKeys],
   );
   const selectedNode = useMemo(
-    () => selectedJob?.nodes.find((node) => node.step_key === selectedNodeKey) ?? null,
-    [selectedJob, selectedNodeKey],
+    () => dagLayout.nodes.find((node) => node.step_key === selectedNodeKey) ?? null,
+    [dagLayout.nodes, selectedNodeKey],
   );
   const selectedNodeDependencies = useMemo(
     () => (selectedNodeKey ? dagLayout.dependenciesByKey[selectedNodeKey] ?? [] : []),
@@ -467,6 +456,13 @@ export function App() {
     }
     return jobs.find((job) => job.job_key === runDetail.summary.job_key) ?? null;
   }, [jobs, runDetail]);
+  const runIsActive = useMemo(() => {
+    if (!runDetail) {
+      return false;
+    }
+    const status = normalizeStatus(runDetail.summary.status);
+    return status === "running" || status === "queued";
+  }, [runDetail]);
 
   const runDagLayout = useMemo(
     () =>
@@ -475,7 +471,6 @@ export function App() {
       }),
     [runDetailJob, stepStatusByKey],
   );
-  const runGraphQuery = runGraphSearch.trim().toLowerCase();
   const runVisibleStepKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const node of runDagLayout.nodes) {
@@ -486,21 +481,16 @@ export function App() {
       if (runStepGroupFilter !== "all" && runStepGroupFromStatus(normalizedStatus) !== runStepGroupFilter) {
         continue;
       }
-      if (runGraphQuery) {
-        const label = `${node.step_key} ${node.display_name || ""}`.toLowerCase();
-        if (!label.includes(runGraphQuery)) {
-          continue;
-        }
-      }
       keys.add(node.step_key);
     }
     return keys;
-  }, [runDagLayout.nodes, runGraphQuery, runHideUnexecuted, runStepGroupFilter, stepStatusByKey]);
+  }, [runDagLayout.nodes, runHideUnexecuted, runStepGroupFilter, stepStatusByKey]);
 
   const runVisibleNodes = useMemo(
     () => runDagLayout.nodes.filter((node) => runVisibleStepKeys.has(node.step_key)),
     [runDagLayout.nodes, runVisibleStepKeys],
   );
+  const runSelectedStepVisible = runSelectedStepKey.length > 0 && runVisibleStepKeys.has(runSelectedStepKey);
   const runVisibleEdges = useMemo(
     () => runDagLayout.edges.filter((edge) => runVisibleStepKeys.has(edge.from) && runVisibleStepKeys.has(edge.to)),
     [runDagLayout.edges, runVisibleStepKeys],
@@ -809,7 +799,6 @@ export function App() {
     return counts;
   }, [sortedRuns]);
 
-  const selectedRunKeySet = useMemo(() => new Set(selectedRunKeys), [selectedRunKeys]);
   const runsFilterText = runsSearch.trim().toLowerCase();
   const filteredRuns = useMemo(() => {
     let rows = sortedRuns;
@@ -851,7 +840,6 @@ export function App() {
     return filteredRuns.slice(start, start + RUNS_PAGE_SIZE);
   }, [filteredRuns, runsPageIndex]);
 
-  const allVisibleRunsSelected = pagedRuns.length > 0 && pagedRuns.every((run) => selectedRunKeySet.has(run.run_key));
   const runsPageStart = filteredRuns.length === 0 ? 0 : runsPageIndex * RUNS_PAGE_SIZE + 1;
   const runsPageEnd = Math.min(filteredRuns.length, (runsPageIndex + 1) * RUNS_PAGE_SIZE);
 
@@ -996,8 +984,12 @@ export function App() {
       setRunDetail(null);
       setRunEvents([]);
       setRunEventsTotal(0);
+      runEventsScrollToBottomPendingRef.current = false;
       return;
     }
+    runEventsScrollToBottomPendingRef.current = true;
+    setRunEvents([]);
+    setRunEventsTotal(0);
     let active = true;
     let timer: number | null = null;
     const tick = async () => {
@@ -1022,13 +1014,18 @@ export function App() {
 
   useEffect(() => {
     if (!selectedJob) {
-      setSelectedNodeKey("");
+      if (selectedNodeKey) {
+        setSelectedNodeKey("");
+      }
       return;
     }
-    if (!selectedJob.nodes.some((node) => node.step_key === selectedNodeKey)) {
-      setSelectedNodeKey(selectedJob.nodes[0]?.step_key ?? "");
+    if (!selectedNodeKey) {
+      return;
     }
-  }, [selectedJob, selectedNodeKey]);
+    if (!dagLayout.nodes.some((node) => node.step_key === selectedNodeKey)) {
+      setSelectedNodeKey("");
+    }
+  }, [dagLayout.nodes, selectedJob, selectedNodeKey]);
 
   useEffect(() => {
     if (!selectedNodeKey) {
@@ -1094,15 +1091,22 @@ export function App() {
   }, [runDagLayout.nodes, runSelectedStepKey]);
 
   useEffect(() => {
-    if (!runSelectedStepKey) {
+    if (!selectedRunID || runEvents.length === 0) {
       return;
     }
-    if (runVisibleStepKeys.has(runSelectedStepKey)) {
+    const shouldScrollToBottom = runEventsScrollToBottomPendingRef.current || runIsActive;
+    if (!shouldScrollToBottom) {
       return;
     }
-    setRunSelectedStepKey("");
-    setRunEventStepFilter("all");
-  }, [runSelectedStepKey, runVisibleStepKeys]);
+    const viewport = runEventsViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      viewport.scrollTop = viewport.scrollHeight;
+      runEventsScrollToBottomPendingRef.current = false;
+    });
+  }, [runEvents, runIsActive, selectedRunID]);
 
   useEffect(() => {
     if (runEventStepFilter === "all") {
@@ -1114,7 +1118,6 @@ export function App() {
   }, [runDagLayout.nodes, runEventStepFilter]);
 
   useEffect(() => {
-    setRunGraphSearch("");
     setRunHideUnexecuted(false);
     setRunSelectedStepKey("");
     setRunStepGroupFilter("all");
@@ -1128,7 +1131,7 @@ export function App() {
   }, [selectedRunID]);
 
   useEffect(() => {
-    setJobGraphSearch("");
+    setJobDetailTab("overview");
   }, [selectedJobKey]);
 
   useEffect(() => {
@@ -1146,45 +1149,6 @@ export function App() {
       setRunsPageIndex(maxPage);
     }
   }, [runsPageCount, runsPageIndex]);
-
-  useEffect(() => {
-    const validKeys = new Set(filteredRuns.map((run) => run.run_key));
-    setSelectedRunKeys((current) => current.filter((key) => validKeys.has(key)));
-  }, [filteredRuns]);
-
-  useEffect(() => {
-    if (!runsActionKey) {
-      return;
-    }
-    const onWindowClick = () => setRunsActionKey("");
-    window.addEventListener("click", onWindowClick);
-    return () => window.removeEventListener("click", onWindowClick);
-  }, [runsActionKey]);
-
-  function toggleRunSelection(runKey: string) {
-    setSelectedRunKeys((current) => {
-      if (current.includes(runKey)) {
-        return current.filter((key) => key !== runKey);
-      }
-      return [...current, runKey];
-    });
-  }
-
-  function toggleSelectAllVisibleRuns() {
-    setSelectedRunKeys((current) => {
-      const next = new Set(current);
-      if (allVisibleRunsSelected) {
-        for (const run of pagedRuns) {
-          next.delete(run.run_key);
-        }
-      } else {
-        for (const run of pagedRuns) {
-          next.add(run.run_key);
-        }
-      }
-      return Array.from(next);
-    });
-  }
 
   function toggleRunGroupCollapse(group: RunStepGroupKey) {
     setCollapsedRunGroups((current) => {
@@ -1204,14 +1168,20 @@ export function App() {
     });
   }
 
-  function handleRunStepSelect(stepKey: string) {
-    if (!stepKey || runSelectedStepKey === stepKey) {
-      setRunSelectedStepKey("");
-      setRunEventStepFilter("all");
+  function handleJobNodeSelect(stepKey: string) {
+    if (!stepKey) {
       return;
     }
-    setRunSelectedStepKey(stepKey);
-    setRunEventStepFilter(stepKey);
+    setSelectedNodeKey((current) => (current === stepKey ? "" : stepKey));
+  }
+
+  function handleRunStepSelect(stepKey: string) {
+    if (!stepKey) {
+      return;
+    }
+    const deselect = runSelectedStepKey === stepKey;
+    setRunSelectedStepKey(deselect ? "" : stepKey);
+    setRunEventStepFilter(deselect ? "all" : stepKey);
   }
 
   async function refreshJobs() {
@@ -1305,17 +1275,15 @@ export function App() {
   async function launchRun() {
     if (!selectedJobKey) return;
     try {
-      setLoading(true);
+      setRunLaunchBusy(true);
       setError("");
       const response = (await api.runs.RunCreate({
         job_key: selectedJobKey,
         triggered_by: "ui",
-        note: launchNote,
       })) as RunCreateResponse;
       if (response.error) {
         throw new Error(response.error);
       }
-      setLaunchNote("");
       await refreshAllRuns();
       if (response.run?.run_key) {
         openRun(response.run.run_key);
@@ -1323,17 +1291,17 @@ export function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to launch run");
     } finally {
-      setLoading(false);
+      setRunLaunchBusy(false);
     }
   }
 
-  async function updateJobScheduling(schedulingPaused: boolean) {
-    if (!selectedJob) return;
+  async function updateJobSchedulingForJob(jobKey: string, schedulingPaused: boolean) {
+    if (!jobKey) return;
     try {
-      setLoading(true);
+      setScheduleUpdatePendingByKey((current) => ({ ...current, [jobKey]: true }));
       setError("");
       const response = (await api.jobs.JobSchedulingUpdate({
-        job_key: selectedJob.job_key,
+        job_key: jobKey,
         scheduling_paused: schedulingPaused,
       })) as JobSchedulingUpdateResponse;
       if (response.error) {
@@ -1343,31 +1311,14 @@ export function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update scheduling state");
     } finally {
-      setLoading(false);
-    }
-  }
-
-  async function rerunStep(stepKey: string) {
-    if (!runDetail) return;
-    try {
-      setLoading(true);
-      setError("");
-      const response = (await api.runs.RunRerunStepCreate({
-        source_run_id: runDetail.summary.id,
-        step_key: stepKey,
-        triggered_by: "ui-rerun",
-      })) as RunCreateResponse;
-      if (response.error) {
-        throw new Error(response.error);
-      }
-      await refreshAllRuns();
-      if (response.run?.run_key) {
-        openRun(response.run.run_key);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rerun step");
-    } finally {
-      setLoading(false);
+      setScheduleUpdatePendingByKey((current) => {
+        if (!current[jobKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[jobKey];
+        return next;
+      });
     }
   }
 
@@ -1405,8 +1356,6 @@ export function App() {
       }
     } catch {
       // ignore clipboard errors in older browsers or denied permission
-    } finally {
-      setRunsActionKey("");
     }
   }
 
@@ -1459,7 +1408,26 @@ export function App() {
     }
   }
 
-  const selectedJobSchedules = (scheduleRows ?? []).filter((entry) => !selectedJob || entry.job_key === selectedJob.job_key);
+  const selectedJobSchedules = useMemo(() => {
+    if (!selectedJob) {
+      return [] as ScheduleRow[];
+    }
+    const explicitRows = (scheduleRows ?? []).filter((entry) => entry.job_key === selectedJob.job_key);
+    if (explicitRows.length > 0) {
+      return explicitRows;
+    }
+    return (selectedJob.schedules ?? []).map((entry, index) => ({
+      id: -(index + 1),
+      job_id: selectedJob.id,
+      job_key: selectedJob.job_key,
+      schedule_key: entry.schedule_key,
+      cron_expr: entry.cron_expr,
+      timezone: entry.timezone,
+      is_enabled: entry.is_enabled,
+      description: entry.description,
+    }));
+  }, [scheduleRows, selectedJob]);
+  const selectedJobHasSchedules = selectedJobSchedules.length > 0;
 
   return (
     <div className="app-shell">
@@ -1749,7 +1717,9 @@ export function App() {
                     {jobs.map((job) => {
                       const latestRun = latestRunByJob[job.job_key];
                       const latestStatus = latestRun ? normalizeStatus(latestRun.status) : "pending";
-                      const schedulingState = schedulingStateForJob(job);
+                      const scheduleCount = Math.max(scheduleRowsByJob[job.job_key]?.length ?? 0, job.schedules.length);
+                      const hasSchedules = scheduleCount > 0;
+                      const schedulingEnabled = hasSchedules && !job.scheduling_paused;
                       return (
                         <article key={job.job_key} className="job-item">
                           <button className="job-item-main" onClick={() => openJobDetail(job.job_key)}>
@@ -1758,7 +1728,16 @@ export function App() {
                             <div className="meta">{job.nodes.length} steps</div>
                           </button>
                           <div className="job-item-foot">
-                            <span className={`pill ${schedulingState.tone}`}>{schedulingState.label}</span>
+                            <label className={`job-scheduling-toggle compact ${!hasSchedules ? "disabled" : ""}`}>
+                              <span>Enabled</span>
+                              <input
+                                type="checkbox"
+                                checked={schedulingEnabled}
+                                disabled={Boolean(scheduleUpdatePendingByKey[job.job_key]) || !hasSchedules}
+                                onChange={(event) => void updateJobSchedulingForJob(job.job_key, !event.target.checked)}
+                              />
+                              <strong>{hasSchedules ? (schedulingEnabled ? "Enabled" : "Paused") : "No schedules"}</strong>
+                            </label>
                             <span className={`pill ${latestStatus}`}>{latestRun ? latestStatus : "never ran"}</span>
                             <small>{latestRun ? formatTs(latestRun.started_at || latestRun.queued_at) : "-"}</small>
                             <button className="ghost-btn tiny" onClick={() => openJobHistory(job.job_key)}>
@@ -1776,242 +1755,237 @@ export function App() {
                 </section>
               ) : (
                 <section className="panel graph-panel detail-page job-detail-page">
-                  <div className="panel-head detail-top">
-                    <button className="ghost-btn tiny" onClick={() => navigatePath("/jobs")}>
-                      Back to Jobs
-                    </button>
-                    {selectedJob ? (
-                      <button className="ghost-btn tiny" onClick={() => openJobHistory(selectedJob.job_key)}>
-                        View Run History
-                      </button>
-                    ) : null}
-                  </div>
-
                   {!selectedJob ? (
                     <p className="job-empty-state">Select a job from the list to inspect structure.</p>
                   ) : (
                     <>
+                      <div className="panel-head detail-top">
+                        <div className="job-detail-tabs" role="tablist" aria-label="Job detail tabs">
+                          <button
+                            role="tab"
+                            id="job-detail-tab-overview"
+                            aria-controls="job-detail-panel-overview"
+                            aria-selected={jobDetailTab === "overview"}
+                            className={`job-detail-tab ${jobDetailTab === "overview" ? "active" : ""}`}
+                            onClick={() => setJobDetailTab("overview")}
+                          >
+                            Overview
+                          </button>
+                          <button
+                            role="tab"
+                            id="job-detail-tab-runs"
+                            aria-controls="job-detail-panel-runs"
+                            aria-selected={jobDetailTab === "runs"}
+                            className={`job-detail-tab ${jobDetailTab === "runs" ? "active" : ""}`}
+                            onClick={() => setJobDetailTab("runs")}
+                          >
+                            Runs
+                          </button>
+                        </div>
+                        <button disabled={runLaunchBusy} className="primary-btn job-run-action-btn" onClick={() => void launchRun()}>
+                          {runLaunchBusy ? "Submitting..." : "Run Job"}
+                        </button>
+                      </div>
+
                       <header className="job-detail-header">
                         <div className="job-header-primary">
                           <strong>{selectedJob.job_key}</strong>
                           <span className="run-job-chip">{selectedJob.display_name || selectedJob.job_key}</span>
-                          <span className={`pill ${selectedJobSchedulingState?.tone ?? "pending"}`}>
-                            {selectedJobSchedulingState?.label ?? "no schedules"}
-                          </span>
+                          <label className={`job-scheduling-toggle ${!selectedJobHasSchedules ? "disabled" : ""}`}>
+                            <span>Enabled</span>
+                            <input
+                              type="checkbox"
+                              checked={selectedJobHasSchedules && !selectedJob.scheduling_paused}
+                              disabled={Boolean(scheduleUpdatePendingByKey[selectedJob.job_key]) || !selectedJobHasSchedules}
+                              onChange={(event) => void updateJobSchedulingForJob(selectedJob.job_key, !event.target.checked)}
+                            />
+                            <strong>
+                              {selectedJobHasSchedules ? (selectedJob.scheduling_paused ? "Paused" : "Enabled") : "No schedules"}
+                            </strong>
+                          </label>
                         </div>
-                        <p className="job-description">{selectedJob.description || "No job description."}</p>
-                        <div className="job-header-meta">
-                          <div>
+                        <p className="job-description job-description-chip">{selectedJob.description || "No job description."}</p>
+                        <div className="job-header-chips">
+                          <div className="job-header-chip">
                             <span>Steps</span>
                             <strong>{selectedJob.nodes.length}</strong>
                           </div>
-                          <div>
+                          <div className="job-header-chip">
                             <span>Schedules</span>
                             <strong>{selectedJobSchedules.length}</strong>
                           </div>
-                          <div>
+                          <div className="job-header-chip">
                             <span>Runs</span>
                             <strong>{selectedJobRunCount}</strong>
                           </div>
                         </div>
                       </header>
 
-                      <div className="detail-grid job-detail-grid">
-                        <div className="launch-box inline-section job-control-card">
-                          <h4>Launch Run</h4>
-                          <label>
-                            Note
-                            <input value={launchNote} onChange={(event) => setLaunchNote(event.target.value)} placeholder="optional" />
-                          </label>
-                          <button disabled={loading} className="primary-btn" onClick={() => void launchRun()}>
-                            {loading ? "Submitting..." : "Run Job"}
-                          </button>
-                          {selectedJob.scheduling_paused ? (
-                            <p className="muted">Scheduling is paused for this job, but manual runs are still allowed.</p>
-                          ) : null}
-                        </div>
-
-                        <div className="schedule-box inline-section job-control-card">
-                          <h4>Scheduling</h4>
-                          <p className="muted">
-                            {selectedJobSchedules.length === 0
-                              ? "This job has no schedules configured."
-                              : selectedJob.scheduling_paused
-                                ? "All future scheduled runs are paused until re-enabled. Manual runs still work."
-                                : "All configured schedules are currently active."}
-                          </p>
-                          <button
-                            disabled={loading || selectedJobSchedules.length === 0}
-                            className="ghost-btn"
-                            onClick={() => void updateJobScheduling(!selectedJob.scheduling_paused)}
-                          >
-                            {selectedJob.scheduling_paused ? "Resume Scheduling" : "Pause Scheduling"}
-                          </button>
-                        </div>
-
-                        <div className="schedule-box inline-section job-control-card">
-                          <h4>Schedules</h4>
-                          <ul className="job-schedule-list">
-                            {selectedJobSchedules.map((entry) => (
-                              <li key={entry.id}>
-                                <span>{entry.description?.trim() ? entry.description : "Scheduled run"}</span>
-                                <code>{formatCronHuman(entry.cron_expr, entry.timezone)}</code>
-                              </li>
-                            ))}
-                            {selectedJobSchedules.length === 0 ? <li className="job-empty-inline">No schedules configured.</li> : null}
-                          </ul>
-                        </div>
-                      </div>
-
-                      <div className="job-ops-layout">
-                        <section className="dag-surface job-dag-pane">
-                          <div className="dag-legend job-dag-controls">
-                            <span className="pill running">running</span>
-                            <span className="pill success">success</span>
-                            <span className="pill failed">failed</span>
-                            <span className="pill pending">pending</span>
-                            <label className="job-search-control">
-                              <span>Step Search</span>
-                              <input
-                                value={jobGraphSearch}
-                                onChange={(event) => setJobGraphSearch(event.target.value)}
-                                placeholder="step key or name"
-                              />
-                            </label>
-                            <span className="job-dag-hint">Click a node to focus dependencies</span>
-                            {selectedNodeKey ? (
-                              <button className="ghost-btn tiny" onClick={() => setSelectedNodeKey("")}>
-                                Clear Selection
-                              </button>
-                            ) : null}
+                      {jobDetailTab === "overview" ? (
+                        <div
+                          className="job-detail-overview"
+                          role="tabpanel"
+                          id="job-detail-panel-overview"
+                          aria-labelledby="job-detail-tab-overview"
+                        >
+                          <div className="detail-grid job-detail-grid">
+                            <div className="schedule-box inline-section job-control-card">
+                              <h4>Schedules</h4>
+                              <ul className="job-schedule-list">
+                                {selectedJobSchedules.map((entry) => {
+                                  const humanLabel = formatCronHuman(entry.cron_expr, entry.timezone);
+                                  const rawLabel = formatCronRaw(entry.cron_expr, entry.timezone);
+                                  const description = entry.description?.trim() ?? "";
+                                  const primaryLabel =
+                                    description && !scheduleTextsEquivalent(description, humanLabel) ? description : humanLabel || "Scheduled run";
+                                  return (
+                                    <li key={entry.id}>
+                                      <span>{primaryLabel}</span>
+                                      {rawLabel && !scheduleTextsEquivalent(primaryLabel, rawLabel) ? <code>{rawLabel}</code> : null}
+                                    </li>
+                                  );
+                                })}
+                                {selectedJobSchedules.length === 0 ? <li className="job-empty-inline">No schedules configured.</li> : null}
+                              </ul>
+                            </div>
                           </div>
 
-                          <div className="dag-stage-wrap">
-                            <DagGraphCanvasHtml
-                              layoutKey={`job-${selectedJob.job_key}`}
-                              worldWidth={dagLayout.width}
-                              worldHeight={dagLayout.height}
-                              nodes={jobVisibleNodes}
-                              edges={jobVisibleEdges}
-                              dependenciesByKey={dagLayout.dependenciesByKey}
-                              dependentsByKey={dagLayout.dependentsByKey}
-                              selectedNodeId={selectedNodeKey}
-                              totalNodeCount={selectedJob.nodes.length}
-                              hardCap={DAG_NODE_HARD_CAP}
-                              getNodeClassName={(node) => {
-                                const active = node.step_key === selectedNodeKey;
-                                const dimmed = selectedNodeKey.length > 0 && !relatedNodeSet.has(node.step_key);
-                                return `dag-node node-${node.status} ${active ? "active" : ""} ${dimmed ? "dimmed" : ""}`;
-                              }}
-                              renderNodeContent={(node) => (
+                          <div className="job-ops-layout">
+                            <section className="dag-surface job-dag-pane">
+                              <div className="dag-legend job-dag-controls">
+                                <span className="job-dag-hint">Click a node to focus dependencies. Click again to clear.</span>
+                              </div>
+
+                              <div className="dag-stage-wrap">
+                                <DagGraphCanvasHtml
+                                  layoutKey={`job-${selectedJob.job_key}`}
+                                  worldWidth={dagLayout.width}
+                                  worldHeight={dagLayout.height}
+                                  nodes={jobVisibleNodes}
+                                  edges={jobVisibleEdges}
+                                  dependenciesByKey={dagLayout.dependenciesByKey}
+                                  dependentsByKey={dagLayout.dependentsByKey}
+                                  selectedNodeId={selectedNodeKey}
+                                  totalNodeCount={selectedJob.nodes.length}
+                                  hardCap={DAG_NODE_HARD_CAP}
+                                  getNodeClassName={(node) => {
+                                    const active = node.step_key === selectedNodeKey;
+                                    const dimmed = selectedNodeKey.length > 0 && !relatedNodeSet.has(node.step_key);
+                                    return `dag-node node-neutral ${active ? "active" : ""} ${dimmed ? "dimmed" : ""}`;
+                                  }}
+                                  renderNodeContent={(node) => (
+                                    <>
+                                      <span className="dag-node-title">{node.display_name || node.step_key}</span>
+                                      <span className="pill neutral">definition</span>
+                                    </>
+                                  )}
+                                  onNodeClick={(node) => handleJobNodeSelect(node.step_key)}
+                                  emptyMessage="No steps match this filter."
+                                />
+                              </div>
+                            </section>
+
+                            <aside className="dag-inspector job-step-sidebar">
+                              {!selectedNode ? (
+                                <p className="job-empty-state">Select a step to inspect dependencies.</p>
+                              ) : (
                                 <>
-                                  <span className="dag-node-title">{node.display_name || node.step_key}</span>
-                                  <span className="dag-node-key">{node.step_key}</span>
-                                  <span className={`pill ${node.status}`}>{node.status}</span>
+                                  <div className="panel-head compact">
+                                    <h4>{selectedNode.display_name || selectedNode.step_key}</h4>
+                                    <span className="pill neutral">definition</span>
+                                  </div>
+                                  <p className="job-step-description">{selectedNode.description || "No step description."}</p>
+                                  <div className="dag-relations">
+                                    <div>
+                                      <strong>Upstream</strong>
+                                      <div className="dag-key-list">
+                                        {selectedNodeDependencies.length === 0 ? (
+                                          <span className="job-empty-inline">none</span>
+                                        ) : (
+                                          selectedNodeDependencies.map((key) => <code key={key}>{key}</code>)
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <strong>Downstream</strong>
+                                      <div className="dag-key-list">
+                                        {selectedNodeDependents.length === 0 ? (
+                                          <span className="job-empty-inline">none</span>
+                                        ) : (
+                                          selectedNodeDependents.map((key) => <code key={key}>{key}</code>)
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
                                 </>
                               )}
-                              onNodeClick={(node) => setSelectedNodeKey(node.step_key)}
-                              emptyMessage="No steps match this filter."
-                            />
+                            </aside>
                           </div>
-                        </section>
-
-                        <aside className="dag-inspector job-step-sidebar">
-                          {!selectedNode ? (
-                            <p className="job-empty-state">Select a step to inspect dependencies.</p>
-                          ) : (
-                            <>
-                              <div className="panel-head compact">
-                                <h4>{selectedNode.display_name || selectedNode.step_key}</h4>
-                                <span className={`pill ${stepStatusByKey[selectedNode.step_key] ?? "pending"}`}>
-                                  {stepStatusByKey[selectedNode.step_key] ?? "pending"}
-                                </span>
-                              </div>
-                              <p className="job-step-description">{selectedNode.description || "No step description."}</p>
-                              <div className="dag-relations">
-                                <div>
-                                  <strong>Upstream</strong>
-                                  <div className="dag-key-list">
-                                    {selectedNodeDependencies.length === 0 ? (
-                                      <span className="job-empty-inline">none</span>
-                                    ) : (
-                                      selectedNodeDependencies.map((key) => <code key={key}>{key}</code>)
-                                    )}
-                                  </div>
-                                </div>
-                                <div>
-                                  <strong>Downstream</strong>
-                                  <div className="dag-key-list">
-                                    {selectedNodeDependents.length === 0 ? (
-                                      <span className="job-empty-inline">none</span>
-                                    ) : (
-                                      selectedNodeDependents.map((key) => <code key={key}>{key}</code>)
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </aside>
-                      </div>
-
-                      <div className="runs-list job-runs-list">
-                        <div className="panel-head compact">
-                          <h4>Recent Runs</h4>
-                          <button className="ghost-btn tiny" onClick={() => openJobHistory(selectedJob.job_key)}>
-                            View All Runs
-                          </button>
                         </div>
-                        <div className="job-runs-table-wrap">
-                          <table className="job-runs-table">
-                            <thead>
-                              <tr>
-                                <th>Run ID</th>
-                                <th>Status</th>
-                                <th>Triggered By</th>
-                                <th>Started</th>
-                                <th>Duration</th>
-                                <th>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {selectedJobRuns.map((run) => {
-                                const status = normalizeStatus(run.status);
-                                const startedAt = formatTs(run.started_at || run.queued_at || run.completed_at);
-                                return (
-                                  <tr key={run.id} className="job-run-row" onClick={() => openRun(run.run_key)}>
-                                    <td className="job-run-id">{run.run_key}</td>
-                                    <td>
-                                      <span className={`run-status-badge ${status}`}>{runStatusLabel(status)}</span>
-                                    </td>
-                                    <td className="job-run-trigger">{run.triggered_by || "-"}</td>
-                                    <td className="job-run-time">{startedAt}</td>
-                                    <td className="job-run-duration">{formatRunDurationCell(run)}</td>
-                                    <td className="job-run-actions">
-                                      <button
-                                        className="ghost-btn tiny"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          openRun(run.run_key);
-                                        }}
-                                      >
-                                        View
-                                      </button>
+                      ) : (
+                        <section
+                          className="job-runs-list job-runs-tab-panel"
+                          role="tabpanel"
+                          id="job-detail-panel-runs"
+                          aria-labelledby="job-detail-tab-runs"
+                        >
+                          <div className="panel-head compact">
+                            <h4>Recent Runs</h4>
+                            <button className="ghost-btn tiny" onClick={() => openJobHistory(selectedJob.job_key)}>
+                              View All Runs
+                            </button>
+                          </div>
+                          <div className="job-runs-table-wrap">
+                            <table className="job-runs-table">
+                              <thead>
+                                <tr>
+                                  <th>Run ID</th>
+                                  <th>Status</th>
+                                  <th>Triggered By</th>
+                                  <th>Started</th>
+                                  <th>Duration</th>
+                                  <th>Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {selectedJobRuns.map((run) => {
+                                  const status = normalizeStatus(run.status);
+                                  const startedAt = formatTs(run.started_at || run.queued_at || run.completed_at);
+                                  return (
+                                    <tr key={run.id} className="job-run-row" onClick={() => openRun(run.run_key)}>
+                                      <td className="job-run-id">{run.run_key}</td>
+                                      <td>
+                                        <span className={`run-status-badge ${status}`}>{runStatusLabel(status)}</span>
+                                      </td>
+                                      <td className="job-run-trigger">{run.triggered_by || "-"}</td>
+                                      <td className="job-run-time">{startedAt}</td>
+                                      <td className="job-run-duration">{formatRunDurationCell(run)}</td>
+                                      <td className="job-run-actions">
+                                        <button
+                                          className="ghost-btn tiny"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            openRun(run.run_key);
+                                          }}
+                                        >
+                                          View
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                {selectedJobRuns.length === 0 ? (
+                                  <tr>
+                                    <td className="job-runs-empty" colSpan={6}>
+                                      No runs yet for this job.
                                     </td>
                                   </tr>
-                                );
-                              })}
-                              {selectedJobRuns.length === 0 ? (
-                                <tr>
-                                  <td className="job-runs-empty" colSpan={6}>
-                                    No runs yet for this job.
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
+                                ) : null}
+                              </tbody>
+                            </table>
+                          </div>
+                        </section>
+                      )}
                     </>
                   )}
                 </section>
@@ -2025,10 +1999,7 @@ export function App() {
                 <section className="panel runs-list-panel">
                   <div className="panel-head runs-head">
                     <h3>Runs</h3>
-                    <span className="muted">
-                      {filteredRuns.length} shown
-                      {selectedRunKeys.length > 0 ? ` · ${selectedRunKeys.length} selected` : ""}
-                    </span>
+                    <span className="muted">{filteredRuns.length} shown</span>
                   </div>
 
                   <div className="runs-quick-tabs">
@@ -2103,21 +2074,12 @@ export function App() {
                     <table className="runs-table">
                       <thead>
                         <tr>
-                          <th className="cell-check">
-                            <input
-                              type="checkbox"
-                              checked={allVisibleRunsSelected}
-                              aria-label="select all runs on this page"
-                              onChange={toggleSelectAllVisibleRuns}
-                            />
-                          </th>
                           <th>Run ID</th>
                           <th>Job</th>
                           <th>Triggered By</th>
                           <th>Status</th>
                           <th>Created At</th>
                           <th>Duration</th>
-                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2126,17 +2088,22 @@ export function App() {
                           const createdAt = formatTs(run.queued_at || run.started_at || run.completed_at);
                           return (
                             <tr key={run.id} className="runs-row" onClick={() => openRun(run.run_key)}>
-                              <td className="cell-check">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedRunKeySet.has(run.run_key)}
-                                  aria-label={`select ${run.run_key}`}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={() => toggleRunSelection(run.run_key)}
-                                />
-                              </td>
                               <td className="cell-run-id">
                                 <span className="run-id">{run.run_key}</span>
+                                <button
+                                  className="run-id-copy-btn"
+                                  aria-label={`Copy run id ${run.run_key}`}
+                                  title="Copy run id"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void copyRunKey(run.run_key);
+                                  }}
+                                >
+                                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                                    <rect x="5" y="3" width="8" height="10" rx="1.5" />
+                                    <rect x="2" y="6" width="8" height="8" rx="1.5" />
+                                  </svg>
+                                </button>
                               </td>
                               <td>
                                 <span className="run-job-chip">{jobLabelByKey[run.job_key] ?? run.job_key}</span>
@@ -2147,56 +2114,12 @@ export function App() {
                               </td>
                               <td className="cell-created">{createdAt}</td>
                               <td className="cell-duration">{formatRunDurationCell(run)}</td>
-                              <td className="cell-actions">
-                                <div className="runs-row-actions" onClick={(event) => event.stopPropagation()}>
-                                  <button
-                                    className="ghost-btn tiny"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      openRun(run.run_key);
-                                    }}
-                                  >
-                                    View
-                                  </button>
-                                  <button
-                                    className="runs-kebab-btn"
-                                    aria-label="More actions"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setRunsActionKey((current) => (current === run.run_key ? "" : run.run_key));
-                                    }}
-                                  >
-                                    ⋯
-                                  </button>
-                                  {runsActionKey === run.run_key ? (
-                                    <div className="runs-action-menu">
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          openRun(run.run_key);
-                                          setRunsActionKey("");
-                                        }}
-                                      >
-                                        Open Run
-                                      </button>
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void copyRunKey(run.run_key);
-                                        }}
-                                      >
-                                        Copy Run ID
-                                      </button>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </td>
                             </tr>
                           );
                         })}
                         {pagedRuns.length === 0 ? (
                           <tr>
-                            <td className="runs-empty-row" colSpan={8}>
+                            <td className="runs-empty-row" colSpan={6}>
                               No runs match the current filters.
                             </td>
                           </tr>
@@ -2247,7 +2170,6 @@ export function App() {
                     <button
                       className="ghost-btn tiny"
                       onClick={() => {
-                        setRunGraphSearch("");
                         setRunHideUnexecuted(false);
                         setRunStepGroupFilter("all");
                         setRunEventLevelFilter("all");
@@ -2297,14 +2219,6 @@ export function App() {
                       <div className="run-ops-layout">
                         <section className="run-graph-pane">
                           <div className="run-graph-controls">
-                            <label className="run-search-control">
-                              <span>Step Search</span>
-                              <input
-                                value={runGraphSearch}
-                                onChange={(event) => setRunGraphSearch(event.target.value)}
-                                placeholder="step key or name"
-                              />
-                            </label>
                             <label className="run-inline-check">
                               <input
                                 type="checkbox"
@@ -2313,12 +2227,7 @@ export function App() {
                               />
                               Hide unexecuted
                             </label>
-                            <span className="run-graph-hint">Click a step to focus upstream/downstream flow</span>
-                            {runSelectedStepKey ? (
-                              <button className="ghost-btn tiny" onClick={() => handleRunStepSelect(runSelectedStepKey)}>
-                                Clear Selection
-                              </button>
-                            ) : null}
+                            <span className="run-graph-hint">Click a step to focus upstream/downstream flow. Click again to clear.</span>
                           </div>
 
                           <div className="run-dag-wrap">
@@ -2338,7 +2247,7 @@ export function App() {
                                 const visual = runStepVisualState(normalizedStatus);
                                 const active = node.step_key === runSelectedStepKey;
                                 const hovered = node.step_key === runHoveredStepKey;
-                                const dimmed = runSelectedStepKey.length > 0 && !runRelatedNodeSet.has(node.step_key);
+                                const dimmed = runSelectedStepVisible && !runRelatedNodeSet.has(node.step_key);
                                 return `run-step-node ${visual} ${active ? "active" : ""} ${hovered ? "hovered" : ""} ${dimmed ? "dimmed" : ""}`;
                               }}
                               renderNodeContent={(node) => {
@@ -2399,7 +2308,11 @@ export function App() {
                                 {!collapsed ? (
                                   <div className="run-state-step-list">
                                     {steps.slice(0, 8).map((stepKey) => (
-                                      <button key={stepKey} onClick={() => handleRunStepSelect(stepKey)}>
+                                      <button
+                                        key={stepKey}
+                                        className={stepKey === runSelectedStepKey ? "active" : ""}
+                                        onClick={() => handleRunStepSelect(stepKey)}
+                                      >
                                         {stepKey}
                                       </button>
                                     ))}
@@ -2469,7 +2382,7 @@ export function App() {
                           </label>
                         </div>
 
-                        <div className="run-events-table-wrap">
+                        <div className="run-events-table-wrap" ref={runEventsViewportRef}>
                           <table className="run-events-table">
                             <colgroup>
                               <col className="run-events-col-ts" />
@@ -2492,10 +2405,12 @@ export function App() {
                                 const message = collapsed ? truncateText(event.message, 200) : event.message;
                                 const formattedEventData = collapsed ? "" : formatRunEventDataJSON(event.event_data_json);
                                 const highlight = runHoveredStepKey.length > 0 && runHoveredStepKey === event.step_key;
+                                const outcomeClass = runEventOutcomeClass(event);
+                                const severityClass = isErrorEvent(event) ? "error" : isWarningEvent(event) ? "warning" : "";
                                 return (
                                   <tr
                                     key={event.id}
-                                    className={`run-event-row ${isErrorEvent(event) ? "error" : ""} ${highlight ? "step-highlight" : ""}`}
+                                    className={`run-event-row ${severityClass} ${outcomeClass} ${highlight ? "step-highlight" : ""}`}
                                   >
                                     <td className="run-event-ts">{formatTs(event.created_at)}</td>
                                     <td className="run-event-step">{event.step_key || "-"}</td>
@@ -2749,6 +2664,26 @@ function isErrorEvent(event: RunEvent): boolean {
   return eventType.includes("fail") || eventType.includes("error");
 }
 
+function isWarningEvent(event: RunEvent): boolean {
+  const level = normalizeEventLevel(event.level);
+  if (level === "warn" || level === "warning") {
+    return true;
+  }
+  const eventType = (event.event_type || "").toLowerCase();
+  return eventType.includes("warn");
+}
+
+function runEventOutcomeClass(event: RunEvent): string {
+  const eventType = (event.event_type || "").trim().toLowerCase();
+  if (eventType === "step_succeeded") {
+    return "step-succeeded";
+  }
+  if (eventType === "step_failed") {
+    return "step-failed";
+  }
+  return "";
+}
+
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
@@ -2856,6 +2791,20 @@ function formatCronHuman(cronExpr: string, timezone: string): string {
   } catch {
     return tz ? `${expression} (${tz})` : expression;
   }
+}
+
+function formatCronRaw(cronExpr: string, timezone: string): string {
+  const expression = cronExpr.trim();
+  const tz = timezone.trim();
+  if (!expression) {
+    return "";
+  }
+  return tz ? `${expression} (${tz})` : expression;
+}
+
+function scheduleTextsEquivalent(left: string, right: string): boolean {
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalize(left) === normalize(right);
 }
 
 export default App;
