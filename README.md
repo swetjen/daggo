@@ -13,15 +13,15 @@ DAGGO is a Go-native workflow orchestrator for teams that want to define jobs in
 
 The embedded UI is intended to be usable immediately in an imported app: overview timeline, job graph, and run history in one place.
 
-![DAGGO overview timeline](docs/daggo-overview.png)
+![DAGGO overview timeline](docs/images/overview.png)
 
 The job detail view shows the DAG shape, an `Enabled` scheduling toggle, and tabbed `Overview`/`Runs` panels with inline run launch.
 
-![DAGGO job detail graph](docs/daggo-job.png)
+![DAGGO job detail graph](docs/images/run-detail.png)
 
 The runs view gives a run-centric history with filtering and drill-in diagnostics.
 
-![DAGGO runs history](docs/daggo-runs.png)
+![DAGGO runs history](docs/images/runs-history.png)
 
 ## What You Get
 
