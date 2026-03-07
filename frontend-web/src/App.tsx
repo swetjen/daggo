@@ -236,6 +236,7 @@ const RUN_STEP_GROUPS: { key: RunStepGroupKey; label: string }[] = [
 ];
 
 const RUNS_PAGE_SIZE = 50;
+const JOB_HEALTH_RUN_COUNT = 5;
 
 function normalizePathname(pathname: string): string {
   const withSlash = pathname.startsWith("/") ? pathname : `/${pathname}`;
@@ -339,7 +340,7 @@ export function App() {
   const [runEventsTotal, setRunEventsTotal] = useState(0);
   const [runEventsBusy, setRunEventsBusy] = useState(false);
   const [selectedNodeKey, setSelectedNodeKey] = useState<string>("");
-  const [runLaunchBusy, setRunLaunchBusy] = useState(false);
+  const [runLaunchPendingByJobKey, setRunLaunchPendingByJobKey] = useState<Record<string, boolean>>({});
   const [scheduleUpdatePendingByKey, setScheduleUpdatePendingByKey] = useState<Record<string, boolean>>({});
 
   const [loading, setLoading] = useState(false);
@@ -368,6 +369,7 @@ export function App() {
   const [runsQuickFilter, setRunsQuickFilter] = useState<RunsQuickFilter>("all");
   const [runsSort, setRunsSort] = useState<RunsSort>("newest");
   const [runsPageIndex, setRunsPageIndex] = useState(0);
+  const [jobsQuery, setJobsQuery] = useState("");
 
   const [runHideUnexecuted, setRunHideUnexecuted] = useState(false);
   const [runSelectedStepKey, setRunSelectedStepKey] = useState("");
@@ -430,6 +432,34 @@ export function App() {
     }
     return byJob;
   }, [sortedRuns]);
+  const recentRunsByJob = useMemo(() => {
+    const byJob: Record<string, RunSummary[]> = {};
+    for (const run of sortedRuns) {
+      const rows = byJob[run.job_key] ?? [];
+      if (rows.length >= JOB_HEALTH_RUN_COUNT) {
+        continue;
+      }
+      rows.push(run);
+      byJob[run.job_key] = rows;
+    }
+    return byJob;
+  }, [sortedRuns]);
+  const jobsQueryText = jobsQuery.trim().toLowerCase();
+  const jobsForList = useMemo(() => {
+    const sorted = [...jobs].sort((left, right) => {
+      const leftLabel = left.display_name || left.job_key;
+      const rightLabel = right.display_name || right.job_key;
+      return leftLabel.localeCompare(rightLabel);
+    });
+    if (!jobsQueryText) {
+      return sorted;
+    }
+    return sorted.filter((job) => {
+      const haystack = `${job.display_name} ${job.job_key} ${job.description}`.toLowerCase();
+      return haystack.includes(jobsQueryText);
+    });
+  }, [jobs, jobsQueryText]);
+  const runLaunchBusy = Boolean(selectedJobKey && runLaunchPendingByJobKey[selectedJobKey]);
 
   const dagLayout = useMemo(
     () =>
@@ -1315,27 +1345,39 @@ export function App() {
     }
   }
 
-  async function launchRun() {
-    if (!selectedJobKey) return;
+  async function launchRunForJob(jobKey: string, options?: { openRunOnSuccess?: boolean }) {
+    if (!jobKey) return;
     try {
-      setRunLaunchBusy(true);
+      setRunLaunchPendingByJobKey((current) => ({ ...current, [jobKey]: true }));
       setError("");
       const response = (await api.runs.RunCreate({
-        job_key: selectedJobKey,
+        job_key: jobKey,
         triggered_by: "ui",
       })) as RunCreateResponse;
       if (response.error) {
         throw new Error(response.error);
       }
       await refreshAllRuns();
-      if (response.run?.run_key) {
+      if (options?.openRunOnSuccess && response.run?.run_key) {
         openRun(response.run.run_key);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to launch run");
     } finally {
-      setRunLaunchBusy(false);
+      setRunLaunchPendingByJobKey((current) => {
+        if (!current[jobKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[jobKey];
+        return next;
+      });
     }
+  }
+
+  async function launchRun() {
+    if (!selectedJobKey) return;
+    await launchRunForJob(selectedJobKey, { openRunOnSuccess: true });
   }
 
   async function updateJobSchedulingForJob(jobKey: string, schedulingPaused: boolean) {
@@ -1770,50 +1812,182 @@ export function App() {
           {activeSection === "jobs" ? (
             <div className="jobs-page-shell">
               {jobsPage === "list" ? (
-                <section className="panel jobs-panel">
-                  <div className="panel-head">
+                <section className="panel jobs-panel jobs-table-panel">
+                  <div className="panel-head jobs-table-head">
                     <h3>Jobs</h3>
-                    <span className="muted">{jobs.length} total</span>
+                    <span className="muted">
+                      {jobsForList.length} shown / {jobs.length} total
+                    </span>
                   </div>
 
-                  <div className="jobs-list">
-                    {jobs.map((job) => {
-                      const latestRun = latestRunByJob[job.job_key];
-                      const latestStatus = latestRun ? normalizeStatus(latestRun.status) : "pending";
-                      const scheduleCount = Math.max(scheduleRowsByJob[job.job_key]?.length ?? 0, job.schedules.length);
-                      const hasSchedules = scheduleCount > 0;
-                      const schedulingEnabled = hasSchedules && !job.scheduling_paused;
-                      return (
-                        <article key={job.job_key} className="job-item">
-                          <button className="job-item-main" onClick={() => openJobDetail(job.job_key)}>
-                            <strong>{job.display_name || job.job_key}</strong>
-                            <small>{job.description || "No description"}</small>
-                            <div className="meta">{job.nodes.length} steps</div>
-                          </button>
-                          <div className="job-item-foot">
-                            <label className={`job-scheduling-toggle compact ${!hasSchedules ? "disabled" : ""}`}>
-                              <span>Enabled</span>
-                              <input
-                                type="checkbox"
-                                checked={schedulingEnabled}
-                                disabled={Boolean(scheduleUpdatePendingByKey[job.job_key]) || !hasSchedules}
-                                onChange={(event) => void updateJobSchedulingForJob(job.job_key, !event.target.checked)}
-                              />
-                              <strong>{hasSchedules ? (schedulingEnabled ? "Enabled" : "Paused") : "No schedules"}</strong>
-                            </label>
-                            <span className={`pill ${latestStatus}`}>{latestRun ? latestStatus : "never ran"}</span>
-                            <small>{latestRun ? formatTs(latestRun.started_at || latestRun.queued_at) : "-"}</small>
-                            <button className="ghost-btn tiny" onClick={() => openJobHistory(job.job_key)}>
-                              Run History
-                            </button>
-                            <button className="ghost-btn tiny" onClick={() => openJobDetail(job.job_key)}>
-                              View Detail
-                            </button>
-                          </div>
-                        </article>
-                      );
-                    })}
-                    {jobs.length === 0 ? <p className="muted">No jobs registered.</p> : null}
+                  <div className="jobs-table-controls">
+                    <label className="jobs-search-field">
+                      <span>Search</span>
+                      <input
+                        value={jobsQuery}
+                        onChange={(event) => setJobsQuery(event.target.value)}
+                        placeholder="Filter by job name, key, or description"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="jobs-table-wrap">
+                    <table className="jobs-table">
+                      <thead>
+                        <tr>
+                          <th className="jobs-col-active">Active</th>
+                          <th className="jobs-col-job">Job</th>
+                          <th className="jobs-col-last-run">Last Run</th>
+                          <th className="jobs-col-health">Run Health</th>
+                          <th className="jobs-col-next-run">Next Run</th>
+                          <th className="jobs-col-actions">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {jobsForList.map((job) => {
+                          const latestRun = latestRunByJob[job.job_key] ?? null;
+                          const recentRuns = recentRunsByJob[job.job_key] ?? [];
+                          const persistedSchedules = (scheduleRowsByJob[job.job_key] ?? []).map((row) => ({
+                            schedule_key: row.schedule_key,
+                            cron_expr: row.cron_expr,
+                            timezone: row.timezone,
+                            is_enabled: row.is_enabled,
+                            description: row.description,
+                          }));
+                          const fallbackSchedules = (job.schedules ?? []).map((row) => ({
+                            schedule_key: row.schedule_key,
+                            cron_expr: row.cron_expr,
+                            timezone: row.timezone,
+                            is_enabled: row.is_enabled,
+                            description: row.description,
+                          }));
+                          const scheduleEntries = persistedSchedules.length > 0 ? persistedSchedules : fallbackSchedules;
+                          const hasSchedules = scheduleEntries.length > 0;
+                          const enabledSchedules = scheduleEntries.filter((entry) => entry.is_enabled);
+                          const schedulingEnabled = hasSchedules && !job.scheduling_paused && enabledSchedules.length > 0;
+                          const nextSchedule = enabledSchedules[0] ?? scheduleEntries[0] ?? null;
+                          const nextRunLabel = !nextSchedule
+                            ? "Not scheduled"
+                            : !schedulingEnabled
+                              ? "Paused"
+                              : formatCronHuman(nextSchedule.cron_expr, nextSchedule.timezone);
+                          const latestRunTimestamp = latestRun
+                            ? latestRun.started_at || latestRun.queued_at || latestRun.completed_at
+                            : "";
+                          const disablePending = Boolean(scheduleUpdatePendingByKey[job.job_key]);
+                          const launchPending = Boolean(runLaunchPendingByJobKey[job.job_key]);
+                          return (
+                            <tr key={job.job_key}>
+                              <td className="jobs-cell-active">
+                                <label className={`job-active-toggle ${!hasSchedules ? "disabled" : ""}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={schedulingEnabled}
+                                    disabled={disablePending || !hasSchedules}
+                                    aria-label={`Toggle ${job.display_name || job.job_key} scheduling`}
+                                    onChange={(event) => {
+                                      const nextEnabled = event.target.checked;
+                                      if (!nextEnabled) {
+                                        const confirmed = window.confirm(
+                                          `Disable scheduling for ${job.display_name || job.job_key}?`,
+                                        );
+                                        if (!confirmed) {
+                                          return;
+                                        }
+                                      }
+                                      void updateJobSchedulingForJob(job.job_key, !nextEnabled);
+                                    }}
+                                  />
+                                  <span className="job-active-slider" />
+                                </label>
+                              </td>
+                              <td className="jobs-cell-job">
+                                <button className="job-link-btn" onClick={() => openJobDetail(job.job_key)}>
+                                  {job.display_name || job.job_key}
+                                </button>
+                                <small>{job.job_key}</small>
+                              </td>
+                              <td className="jobs-cell-last-run">
+                                <span>{latestRun ? formatRelativeTimeFromNow(latestRunTimestamp, refreshClockMs) : "Never ran"}</span>
+                                <small>{latestRun ? formatTs(latestRunTimestamp) : "No runs yet"}</small>
+                              </td>
+                              <td className="jobs-cell-health">
+                                <button
+                                  type="button"
+                                  className="job-health-histogram"
+                                  onClick={() => openJobHistory(job.job_key)}
+                                  title={recentRuns.length > 0 ? "Open run history for this job" : "No runs yet"}
+                                  disabled={recentRuns.length === 0}
+                                >
+                                  {Array.from({ length: JOB_HEALTH_RUN_COUNT }).map((_, index) => {
+                                    const run = recentRuns[index];
+                                    const status = run ? normalizeStatus(run.status) : "empty";
+                                    const runTs = run ? run.started_at || run.queued_at || run.completed_at : "";
+                                    const tileTitle = run
+                                      ? `${runStatusLabel(status)} | ${formatTs(runTs)} | ${formatRunDurationCell(run)}`
+                                      : "No run";
+                                    return <span key={`${job.job_key}-${index}`} className={`job-health-tile ${status}`} title={tileTitle} />;
+                                  })}
+                                </button>
+                              </td>
+                              <td className="jobs-cell-next-run">
+                                <span>{nextRunLabel}</span>
+                                <small>
+                                  {hasSchedules
+                                    ? `${enabledSchedules.length}/${scheduleEntries.length} enabled`
+                                    : `${job.nodes.length} steps`}
+                                </small>
+                              </td>
+                              <td className="jobs-cell-actions">
+                                <details className="job-actions-menu">
+                                  <summary aria-label={`Actions for ${job.display_name || job.job_key}`}>•••</summary>
+                                  <div className="job-actions-popover">
+                                    <button type="button" onClick={() => openJobHistory(job.job_key)}>
+                                      View Runs
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={launchPending}
+                                      onClick={() => void launchRunForJob(job.job_key)}
+                                    >
+                                      {launchPending ? "Submitting..." : "Trigger Run"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={disablePending || !hasSchedules}
+                                      onClick={() => {
+                                        if (!hasSchedules) {
+                                          return;
+                                        }
+                                        const nextEnabled = !schedulingEnabled;
+                                        if (!nextEnabled) {
+                                          const confirmed = window.confirm(
+                                            `Disable scheduling for ${job.display_name || job.job_key}?`,
+                                          );
+                                          if (!confirmed) {
+                                            return;
+                                          }
+                                        }
+                                        void updateJobSchedulingForJob(job.job_key, !nextEnabled);
+                                      }}
+                                    >
+                                      {schedulingEnabled ? "Disable" : "Enable"}
+                                    </button>
+                                  </div>
+                                </details>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {jobsForList.length === 0 ? (
+                          <tr>
+                            <td className="jobs-empty-row" colSpan={6}>
+                              No jobs match the current filter.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
               ) : (
@@ -1860,7 +2034,18 @@ export function App() {
                               type="checkbox"
                               checked={selectedJobHasSchedules && !selectedJob.scheduling_paused}
                               disabled={Boolean(scheduleUpdatePendingByKey[selectedJob.job_key]) || !selectedJobHasSchedules}
-                              onChange={(event) => void updateJobSchedulingForJob(selectedJob.job_key, !event.target.checked)}
+                              onChange={(event) => {
+                                const nextEnabled = event.target.checked;
+                                if (!nextEnabled) {
+                                  const confirmed = window.confirm(
+                                    `Disable scheduling for ${selectedJob.display_name || selectedJob.job_key}?`,
+                                  );
+                                  if (!confirmed) {
+                                    return;
+                                  }
+                                }
+                                void updateJobSchedulingForJob(selectedJob.job_key, !nextEnabled);
+                              }}
                             />
                             <strong>
                               {selectedJobHasSchedules ? (selectedJob.scheduling_paused ? "Paused" : "Enabled") : "No schedules"}
@@ -2561,6 +2746,49 @@ function parseTimestamp(value: string): number {
     return 0;
   }
   return date.getTime();
+}
+
+function formatRelativeTimeFromNow(value: string, nowMs: number): string {
+  const ts = parseTimestamp(value);
+  if (ts <= 0) {
+    return "-";
+  }
+  const reference = nowMs > 0 ? nowMs : Date.now();
+  const diffMs = reference - ts;
+  const absMs = Math.abs(diffMs);
+  const absMinutes = Math.floor(absMs / MINUTE_MS);
+  const absHours = Math.floor(absMs / HOUR_MS);
+  const absDays = Math.floor(absMs / DAY_MS);
+
+  if (diffMs < 0) {
+    if (absMinutes < 1) {
+      return "in <1 min";
+    }
+    if (absMinutes < 60) {
+      return `in ${absMinutes} min`;
+    }
+    if (absHours < 24) {
+      return `in ${absHours} hr`;
+    }
+    return `in ${absDays} day${absDays === 1 ? "" : "s"}`;
+  }
+
+  if (absMinutes < 1) {
+    return "just now";
+  }
+  if (absMinutes < 60) {
+    return `${absMinutes} min ago`;
+  }
+  if (absHours < 24) {
+    return `${absHours} hr ago`;
+  }
+  if (absDays === 1) {
+    return "Yesterday";
+  }
+  if (absDays < 7) {
+    return `${absDays} days ago`;
+  }
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function formatDurationMsLargest(ms: number): string {
