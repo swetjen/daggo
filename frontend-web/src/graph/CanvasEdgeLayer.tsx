@@ -4,6 +4,7 @@ import { centeredSlotOffset, incomingAnchor, outgoingAnchor, WORLD_GRID_UNIT } f
 import type { DagEdgeModel, DagNodeModel, GraphViewport, WorldPoint } from "./types";
 
 type CanvasEdgeLayerProps = {
+  themeMode?: "dark" | "light";
   width: number;
   height: number;
   viewport: GraphViewport;
@@ -15,11 +16,9 @@ type CanvasEdgeLayerProps = {
   showGrid?: boolean;
 };
 
-const EDGE_COLOR = "#344055";
-const EDGE_HIGHLIGHT_COLOR = "#60789a";
-
 export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
   const {
+    themeMode = "dark",
     width,
     height,
     viewport,
@@ -31,6 +30,10 @@ export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
     showGrid = true,
   } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const edgeColor = themeMode === "light" ? "#cbd5e1" : "#344055";
+  const edgeHighlightColor = themeMode === "light" ? "#2563eb" : "#60789a";
+  const gridLineMajorColor = themeMode === "light" ? "rgba(232, 236, 241, 0.9)" : "rgba(52, 64, 85, 0.24)";
+  const gridLineMinorColor = themeMode === "light" ? "rgba(232, 236, 241, 0.6)" : "rgba(52, 64, 85, 0.12)";
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -53,7 +56,10 @@ export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
     context.clearRect(0, 0, width, height);
 
     if (showGrid) {
-      drawGrid(context, width, height, viewport);
+      drawGrid(context, width, height, viewport, {
+        major: gridLineMajorColor,
+        minor: gridLineMinorColor,
+      });
     }
 
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -108,7 +114,7 @@ export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
       const end = worldToScreen(viewport, endWorld);
 
       const highlighted = !selectedNodeId || edge.from === selectedNodeId || edge.to === selectedNodeId;
-      const stroke = highlighted ? EDGE_HIGHLIGHT_COLOR : EDGE_COLOR;
+      const stroke = highlighted ? edgeHighlightColor : edgeColor;
 
       context.beginPath();
       context.moveTo(start.x, start.y);
@@ -134,12 +140,32 @@ export function CanvasEdgeLayer(props: CanvasEdgeLayerProps) {
     }
 
     context.globalAlpha = 1;
-  }, [width, height, viewport, nodes, edges, dependenciesByKey, dependentsByKey, selectedNodeId, showGrid]);
+  }, [
+    dependenciesByKey,
+    dependentsByKey,
+    edgeColor,
+    edgeHighlightColor,
+    edges,
+    gridLineMajorColor,
+    gridLineMinorColor,
+    height,
+    nodes,
+    selectedNodeId,
+    showGrid,
+    viewport,
+    width,
+  ]);
 
   return <canvas ref={canvasRef} className="dag-canvas-edge-layer" aria-hidden="true" />;
 }
 
-function drawGrid(context: CanvasRenderingContext2D, width: number, height: number, viewport: GraphViewport): void {
+function drawGrid(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  viewport: GraphViewport,
+  colors: { major: string; minor: string },
+): void {
   const topLeft = screenToWorld(viewport, { x: 0, y: 0 });
   const bottomRight = screenToWorld(viewport, { x: width, y: height });
 
@@ -162,7 +188,7 @@ function drawGrid(context: CanvasRenderingContext2D, width: number, height: numb
     context.beginPath();
     context.moveTo(Math.round(screen.x) + 0.5, 0);
     context.lineTo(Math.round(screen.x) + 0.5, height);
-    context.strokeStyle = major ? "rgba(52, 64, 85, 0.24)" : "rgba(52, 64, 85, 0.12)";
+    context.strokeStyle = major ? colors.major : colors.minor;
     context.stroke();
   }
 
@@ -172,7 +198,7 @@ function drawGrid(context: CanvasRenderingContext2D, width: number, height: numb
     context.beginPath();
     context.moveTo(0, Math.round(screen.y) + 0.5);
     context.lineTo(width, Math.round(screen.y) + 0.5);
-    context.strokeStyle = major ? "rgba(52, 64, 85, 0.24)" : "rgba(52, 64, 85, 0.12)";
+    context.strokeStyle = major ? colors.major : colors.minor;
     context.stroke();
   }
 

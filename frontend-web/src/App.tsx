@@ -183,6 +183,34 @@ type RunsSort = "newest" | "oldest" | "duration_desc";
 type RunStepGroupKey = "preparing" | "executing" | "failed" | "succeeded" | "not_executed";
 type EventStreamFilter = "all" | "stdout" | "stderr";
 type JobDetailTab = "overview" | "runs";
+type ThemeMode = "dark" | "light";
+
+const THEME_STORAGE_KEY = "daggo.theme";
+
+function resolveInitialThemeMode(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+  try {
+    const persisted = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (persisted === "dark" || persisted === "light") {
+      return persisted;
+    }
+  } catch {
+    // Ignore storage errors in restricted environments.
+  }
+  if (typeof window.matchMedia === "function") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "dark";
+}
+
+const INITIAL_THEME_MODE = resolveInitialThemeMode();
+
+if (typeof document !== "undefined") {
+  document.documentElement.setAttribute("data-theme", INITIAL_THEME_MODE);
+  document.documentElement.style.colorScheme = INITIAL_THEME_MODE;
+}
 
 const RUNS_QUICK_FILTER_ITEMS: { key: RunsQuickFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -289,6 +317,7 @@ function decodePathSegment(value: string): string {
 export function App() {
   const api = useMemo(() => createClient(window.location.origin), []);
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(INITIAL_THEME_MODE);
 
   const [activeSection, setActiveSection] = useState<NavSection>(initialRoute.section);
   const [jobsPage, setJobsPage] = useState<"list" | "detail">(
@@ -909,12 +938,26 @@ export function App() {
     };
   }, []);
 
+  const setTheme = useCallback((nextTheme: ThemeMode) => {
+    setThemeMode(nextTheme);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    } catch {
+      // Ignore storage errors in restricted environments.
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => {
       setRefreshClockMs(Date.now());
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", themeMode);
+    document.documentElement.style.colorScheme = themeMode;
+  }, [themeMode]);
 
   useEffect(() => {
     const delayMs = Math.max(0, nextAutoRefreshAtMs - Date.now());
@@ -1478,28 +1521,48 @@ export function App() {
                   : "Run-centric history, filtering, and step-level diagnostics"}
             </p>
           </div>
-          <div
-            className={`refresh-indicator ${refreshJustUpdated ? "pulse" : ""}`}
-            title={`Auto-refresh every ${Math.floor(RUNS_POLL_INTERVAL_MS / 1000)} seconds`}
-          >
-            <span className="refresh-countdown" aria-live="polite">
-              {refreshCountdownLabel}
-            </span>
-            <button
-              type="button"
-              className={`refresh-icon-btn ${refreshControlBusy ? "busy" : ""}`}
-              onClick={() => void refreshFromControl()}
-              disabled={refreshControlBusy}
-              aria-label="Refresh now"
+          <div className="content-topbar-controls">
+            <div className="theme-toggle" role="group" aria-label="Theme mode">
+              <button
+                type="button"
+                className={`theme-toggle-option ${themeMode === "dark" ? "active" : ""}`}
+                aria-pressed={themeMode === "dark"}
+                onClick={() => setTheme("dark")}
+              >
+                Dark
+              </button>
+              <button
+                type="button"
+                className={`theme-toggle-option ${themeMode === "light" ? "active" : ""}`}
+                aria-pressed={themeMode === "light"}
+                onClick={() => setTheme("light")}
+              >
+                Light
+              </button>
+            </div>
+            <div
+              className={`refresh-indicator ${refreshJustUpdated ? "pulse" : ""}`}
               title={`Auto-refresh every ${Math.floor(RUNS_POLL_INTERVAL_MS / 1000)} seconds`}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M17.8 6.2a8 8 0 1 0 2.1 8.2h-2.1a6 6 0 1 1-1.7-6.1L13.5 11H22V2.5l-4.2 3.7z"
-                />
-              </svg>
-            </button>
+              <span className="refresh-countdown" aria-live="polite">
+                {refreshCountdownLabel}
+              </span>
+              <button
+                type="button"
+                className={`refresh-icon-btn ${refreshControlBusy ? "busy" : ""}`}
+                onClick={() => void refreshFromControl()}
+                disabled={refreshControlBusy}
+                aria-label="Refresh now"
+                title={`Auto-refresh every ${Math.floor(RUNS_POLL_INTERVAL_MS / 1000)} seconds`}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M17.8 6.2a8 8 0 1 0 2.1 8.2h-2.1a6 6 0 1 1-1.7-6.1L13.5 11H22V2.5l-4.2 3.7z"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1859,6 +1922,7 @@ export function App() {
                               <div className="dag-stage-wrap">
                                 <DagGraphCanvasHtml
                                   layoutKey={`job-${selectedJob.job_key}`}
+                                  themeMode={themeMode}
                                   worldWidth={dagLayout.width}
                                   worldHeight={dagLayout.height}
                                   nodes={jobVisibleNodes}
@@ -2233,6 +2297,7 @@ export function App() {
                           <div className="run-dag-wrap">
                             <DagGraphCanvasHtml
                               layoutKey={`run-${runDetail.summary.run_key}`}
+                              themeMode={themeMode}
                               worldWidth={runDagLayout.width}
                               worldHeight={runDagLayout.height}
                               nodes={runVisibleNodes}

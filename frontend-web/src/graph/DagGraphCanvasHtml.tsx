@@ -15,6 +15,7 @@ import type { DagEdgeModel, DagNodeModel, GraphViewport } from "./types";
 
 type DagGraphCanvasHtmlProps = {
   layoutKey: string;
+  themeMode?: "dark" | "light";
   worldWidth: number;
   worldHeight: number;
   nodes: DagNodeModel[];
@@ -48,6 +49,7 @@ type PanState = {
 export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
   const {
     layoutKey,
+    themeMode = "dark",
     worldWidth,
     worldHeight,
     nodes,
@@ -331,6 +333,7 @@ export function DagGraphCanvasHtml(props: DagGraphCanvasHtmlProps) {
         onWheel={handleSurfaceWheel}
       >
         <CanvasEdgeLayer
+          themeMode={themeMode}
           width={surfaceSize.width}
           height={surfaceSize.height}
           viewport={viewport}
