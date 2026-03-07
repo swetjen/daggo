@@ -32,6 +32,13 @@ The runs view gives a run-centric history with filtering and drill-in diagnostic
 - Background scheduling and async run execution.
 - Internal worker bootstrapping handled by DAGGO, so importing apps do not need to implement private subprocess commands.
 
+## Planned Work
+
+- Robust worker pool implementation and coordination from the DAGGO admin.
+- Support for data partitions, assets, and management.
+- Migration support for coming from Dagster and similar tools.
+- Reference integrations with BigQuery, Databricks, and similar platforms.
+
 ## Install
 
 ```bash

@@ -151,6 +151,14 @@ type AppRoute = {
   runKey: string;
 };
 
+type RunHealthPopoverState = {
+  run: RunSummary | null;
+  jobLabel: string;
+  left: number;
+  top: number;
+  placement: "below" | "above";
+};
+
 const STATUS_ORDER = ["failed", "canceled", "running", "queued", "pending", "success", "skipped"];
 const RUNS_POLL_INTERVAL_MS = 15_000;
 const RUN_DETAIL_POLL_INTERVAL_MS = 5_000;
@@ -237,6 +245,7 @@ const RUN_STEP_GROUPS: { key: RunStepGroupKey; label: string }[] = [
 
 const RUNS_PAGE_SIZE = 50;
 const JOB_HEALTH_RUN_COUNT = 5;
+const RUN_HEALTH_POPOVER_DELAY_MS = 120;
 
 function normalizePathname(pathname: string): string {
   const withSlash = pathname.startsWith("/") ? pathname : `/${pathname}`;
@@ -342,6 +351,7 @@ export function App() {
   const [selectedNodeKey, setSelectedNodeKey] = useState<string>("");
   const [runLaunchPendingByJobKey, setRunLaunchPendingByJobKey] = useState<Record<string, boolean>>({});
   const [scheduleUpdatePendingByKey, setScheduleUpdatePendingByKey] = useState<Record<string, boolean>>({});
+  const [runHealthPopover, setRunHealthPopover] = useState<RunHealthPopoverState | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -370,6 +380,9 @@ export function App() {
   const [runsSort, setRunsSort] = useState<RunsSort>("newest");
   const [runsPageIndex, setRunsPageIndex] = useState(0);
   const [jobsQuery, setJobsQuery] = useState("");
+  const runHealthPopoverRef = useRef<HTMLButtonElement | null>(null);
+  const runHealthPopoverShowTimerRef = useRef<number | null>(null);
+  const runHealthPopoverHideTimerRef = useRef<number | null>(null);
 
   const [runHideUnexecuted, setRunHideUnexecuted] = useState(false);
   const [runSelectedStepKey, setRunSelectedStepKey] = useState("");
@@ -823,6 +836,74 @@ export function App() {
     }, OVERVIEW_TOOLTIP_DELAY_MS);
   }, []);
 
+  const clearRunHealthPopoverTimers = useCallback(() => {
+    if (runHealthPopoverShowTimerRef.current !== null) {
+      window.clearTimeout(runHealthPopoverShowTimerRef.current);
+      runHealthPopoverShowTimerRef.current = null;
+    }
+    if (runHealthPopoverHideTimerRef.current !== null) {
+      window.clearTimeout(runHealthPopoverHideTimerRef.current);
+      runHealthPopoverHideTimerRef.current = null;
+    }
+  }, []);
+
+  const queueRunHealthPopover = useCallback(
+    (target: HTMLElement, run: RunSummary | null, jobLabel: string) => {
+      if (runHealthPopoverHideTimerRef.current !== null) {
+        window.clearTimeout(runHealthPopoverHideTimerRef.current);
+        runHealthPopoverHideTimerRef.current = null;
+      }
+      if (runHealthPopoverShowTimerRef.current !== null) {
+        window.clearTimeout(runHealthPopoverShowTimerRef.current);
+        runHealthPopoverShowTimerRef.current = null;
+      }
+      runHealthPopoverShowTimerRef.current = window.setTimeout(() => {
+        const rect = target.getBoundingClientRect();
+        const viewportPadding = 12;
+        const popoverWidth = 244;
+        const popoverHeight = 140;
+        const anchorGap = 8;
+        let left = rect.left + rect.width / 2 - popoverWidth / 2;
+        left = Math.max(viewportPadding, Math.min(left, window.innerWidth - popoverWidth - viewportPadding));
+        let top = rect.bottom + anchorGap;
+        let placement: "below" | "above" = "below";
+        if (top + popoverHeight > window.innerHeight - viewportPadding) {
+          placement = "above";
+          top = rect.top - anchorGap;
+        }
+        setRunHealthPopover({
+          run,
+          jobLabel,
+          left,
+          top,
+          placement,
+        });
+        runHealthPopoverShowTimerRef.current = null;
+      }, RUN_HEALTH_POPOVER_DELAY_MS);
+    },
+    [],
+  );
+
+  const scheduleRunHealthPopoverHide = useCallback((delayMs = 90) => {
+    if (runHealthPopoverShowTimerRef.current !== null) {
+      window.clearTimeout(runHealthPopoverShowTimerRef.current);
+      runHealthPopoverShowTimerRef.current = null;
+    }
+    if (runHealthPopoverHideTimerRef.current !== null) {
+      window.clearTimeout(runHealthPopoverHideTimerRef.current);
+      runHealthPopoverHideTimerRef.current = null;
+    }
+    runHealthPopoverHideTimerRef.current = window.setTimeout(() => {
+      setRunHealthPopover(null);
+      runHealthPopoverHideTimerRef.current = null;
+    }, delayMs);
+  }, []);
+
+  const hideRunHealthPopover = useCallback(() => {
+    clearRunHealthPopoverTimers();
+    setRunHealthPopover(null);
+  }, [clearRunHealthPopoverTimers]);
+
   const runStatuses = useMemo(() => {
     const unique = new Set<string>();
     for (const run of sortedRuns) {
@@ -1051,6 +1132,36 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      clearRunHealthPopoverTimers();
+    };
+  }, [clearRunHealthPopoverTimers]);
+
+  useEffect(() => {
+    if (activeSection === "jobs" && jobsPage === "list") {
+      return;
+    }
+    hideRunHealthPopover();
+  }, [activeSection, hideRunHealthPopover, jobsPage]);
+
+  useEffect(() => {
+    if (!runHealthPopover) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && runHealthPopoverRef.current?.contains(target)) {
+        return;
+      }
+      hideRunHealthPopover();
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [hideRunHealthPopover, runHealthPopover]);
 
   useEffect(() => {
     if (!selectedRunID) {
@@ -1833,6 +1944,14 @@ export function App() {
 
                   <div className="jobs-table-wrap">
                     <table className="jobs-table">
+                      <colgroup>
+                        <col className="jobs-col-active" />
+                        <col className="jobs-col-job" />
+                        <col className="jobs-col-last-run" />
+                        <col className="jobs-col-health" />
+                        <col className="jobs-col-next-run" />
+                        <col className="jobs-col-actions" />
+                      </colgroup>
                       <thead>
                         <tr>
                           <th className="jobs-col-active">Active</th>
@@ -1912,31 +2031,41 @@ export function App() {
                                 <small>{latestRun ? formatTs(latestRunTimestamp) : "No runs yet"}</small>
                               </td>
                               <td className="jobs-cell-health">
-                                <button
-                                  type="button"
-                                  className="job-health-histogram"
-                                  onClick={() => openJobHistory(job.job_key)}
-                                  title={recentRuns.length > 0 ? "Open run history for this job" : "No runs yet"}
-                                  disabled={recentRuns.length === 0}
-                                >
+                                <div className="job-health-histogram" aria-label={`Recent runs for ${job.display_name || job.job_key}`}>
                                   {Array.from({ length: JOB_HEALTH_RUN_COUNT }).map((_, index) => {
-                                    const run = recentRuns[index];
+                                    const runSlotIndex = JOB_HEALTH_RUN_COUNT - 1 - index;
+                                    const run = recentRuns[runSlotIndex] ?? null;
                                     const status = run ? normalizeStatus(run.status) : "empty";
                                     const runTs = run ? run.started_at || run.queued_at || run.completed_at : "";
                                     const tileTitle = run
                                       ? `${runStatusLabel(status)} | ${formatTs(runTs)} | ${formatRunDurationCell(run)}`
-                                      : "No run";
-                                    return <span key={`${job.job_key}-${index}`} className={`job-health-tile ${status}`} title={tileTitle} />;
+                                      : "Run details unavailable";
+                                    if (!run) {
+                                      return <span key={`${job.job_key}-${index}`} className={`job-health-tile ${status}`} title="No run" />;
+                                    }
+                                    return (
+                                      <button
+                                        key={`${job.job_key}-${index}`}
+                                        type="button"
+                                        className={`job-health-tile ${status}`}
+                                        title={tileTitle}
+                                        aria-label={tileTitle}
+                                        onMouseEnter={(event) =>
+                                          queueRunHealthPopover(event.currentTarget, run, job.display_name || job.job_key)
+                                        }
+                                        onMouseLeave={() => scheduleRunHealthPopoverHide()}
+                                        onFocus={(event) =>
+                                          queueRunHealthPopover(event.currentTarget, run, job.display_name || job.job_key)
+                                        }
+                                        onBlur={() => scheduleRunHealthPopoverHide()}
+                                      />
+                                    );
                                   })}
-                                </button>
+                                </div>
                               </td>
                               <td className="jobs-cell-next-run">
                                 <span>{nextRunLabel}</span>
-                                <small>
-                                  {hasSchedules
-                                    ? `${enabledSchedules.length}/${scheduleEntries.length} enabled`
-                                    : `${job.nodes.length} steps`}
-                                </small>
+                                {enabledSchedules.length > 0 ? <small>{enabledSchedules.length} enabled</small> : null}
                               </td>
                               <td className="jobs-cell-actions">
                                 <details className="job-actions-menu">
@@ -1951,27 +2080,6 @@ export function App() {
                                       onClick={() => void launchRunForJob(job.job_key)}
                                     >
                                       {launchPending ? "Submitting..." : "Trigger Run"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={disablePending || !hasSchedules}
-                                      onClick={() => {
-                                        if (!hasSchedules) {
-                                          return;
-                                        }
-                                        const nextEnabled = !schedulingEnabled;
-                                        if (!nextEnabled) {
-                                          const confirmed = window.confirm(
-                                            `Disable scheduling for ${job.display_name || job.job_key}?`,
-                                          );
-                                          if (!confirmed) {
-                                            return;
-                                          }
-                                        }
-                                        void updateJobSchedulingForJob(job.job_key, !nextEnabled);
-                                      }}
-                                    >
-                                      {schedulingEnabled ? "Disable" : "Enable"}
                                     </button>
                                   </div>
                                 </details>
@@ -2027,30 +2135,33 @@ export function App() {
                       <header className="job-detail-header">
                         <div className="job-header-primary">
                           <strong>{selectedJob.job_key}</strong>
-                          <span className="run-job-chip">{selectedJob.display_name || selectedJob.job_key}</span>
-                          <label className={`job-scheduling-toggle ${!selectedJobHasSchedules ? "disabled" : ""}`}>
-                            <span>Enabled</span>
-                            <input
-                              type="checkbox"
-                              checked={selectedJobHasSchedules && !selectedJob.scheduling_paused}
-                              disabled={Boolean(scheduleUpdatePendingByKey[selectedJob.job_key]) || !selectedJobHasSchedules}
-                              onChange={(event) => {
-                                const nextEnabled = event.target.checked;
-                                if (!nextEnabled) {
-                                  const confirmed = window.confirm(
-                                    `Disable scheduling for ${selectedJob.display_name || selectedJob.job_key}?`,
-                                  );
-                                  if (!confirmed) {
-                                    return;
+                          <div className={`job-scheduling-switch ${!selectedJobHasSchedules ? "disabled" : ""}`}>
+                            <span className="job-scheduling-switch-label">Enabled</span>
+                            <label className={`job-active-toggle ${!selectedJobHasSchedules ? "disabled" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={selectedJobHasSchedules && !selectedJob.scheduling_paused}
+                                disabled={Boolean(scheduleUpdatePendingByKey[selectedJob.job_key]) || !selectedJobHasSchedules}
+                                onChange={(event) => {
+                                  const nextEnabled = event.target.checked;
+                                  if (!nextEnabled) {
+                                    const confirmed = window.confirm(
+                                      `Disable scheduling for ${selectedJob.display_name || selectedJob.job_key}?`,
+                                    );
+                                    if (!confirmed) {
+                                      return;
+                                    }
                                   }
-                                }
-                                void updateJobSchedulingForJob(selectedJob.job_key, !nextEnabled);
-                              }}
-                            />
-                            <strong>
-                              {selectedJobHasSchedules ? (selectedJob.scheduling_paused ? "Paused" : "Enabled") : "No schedules"}
-                            </strong>
-                          </label>
+                                  void updateJobSchedulingForJob(selectedJob.job_key, !nextEnabled);
+                                }}
+                              />
+                              <span className="job-active-slider" />
+                            </label>
+                            {!selectedJobHasSchedules ? <small className="job-scheduling-switch-state">No schedules</small> : null}
+                            {selectedJobHasSchedules && selectedJob.scheduling_paused ? (
+                              <small className="job-scheduling-switch-state">Paused</small>
+                            ) : null}
+                          </div>
                         </div>
                         <p className="job-description job-description-chip">{selectedJob.description || "No job description."}</p>
                         <div className="job-header-chips">
@@ -2697,6 +2808,70 @@ export function App() {
             </div>
           ) : null}
         </main>
+
+        {runHealthPopover ? (
+          <button
+            ref={runHealthPopoverRef}
+            type="button"
+            className={`run-health-popover ${runHealthPopover.placement}`}
+            style={{ left: `${runHealthPopover.left}px`, top: `${runHealthPopover.top}px` }}
+            onMouseEnter={() => {
+              if (runHealthPopoverHideTimerRef.current !== null) {
+                window.clearTimeout(runHealthPopoverHideTimerRef.current);
+                runHealthPopoverHideTimerRef.current = null;
+              }
+            }}
+            onMouseLeave={() => scheduleRunHealthPopoverHide()}
+            onClick={() => {
+              if (runHealthPopover.run?.run_key) {
+                openRun(runHealthPopover.run.run_key);
+              }
+              hideRunHealthPopover();
+            }}
+            aria-label={
+              runHealthPopover.run?.run_key
+                ? `Open run ${runHealthPopover.run.run_key}`
+                : "Run details unavailable"
+            }
+          >
+            <div className="run-health-popover-job">{runHealthPopover.jobLabel}</div>
+            <div className="run-health-popover-divider" />
+            {runHealthPopover.run ? (
+              <div className="run-health-popover-rows">
+                <div className="run-health-popover-row">
+                  <span
+                    className={`run-health-popover-icon ${normalizeStatus(runHealthPopover.run.status)} ${
+                      normalizeStatus(runHealthPopover.run.status) === "running" ? "spin" : ""
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {runStatusIcon(normalizeStatus(runHealthPopover.run.status))}
+                  </span>
+                  <span className="run-health-popover-label">Run ID</span>
+                  <code className="run-health-popover-value">{shortRunKey(runHealthPopover.run.run_key)}</code>
+                </div>
+                <div className="run-health-popover-row">
+                  <span className="run-health-popover-icon spacer" aria-hidden="true">
+                    •
+                  </span>
+                  <span className="run-health-popover-label">Timestamp</span>
+                  <span className="run-health-popover-value">
+                    {formatTs(runHealthPopover.run.started_at || runHealthPopover.run.queued_at || runHealthPopover.run.completed_at)}
+                  </span>
+                </div>
+                <div className="run-health-popover-row">
+                  <span className="run-health-popover-icon spacer" aria-hidden="true">
+                    •
+                  </span>
+                  <span className="run-health-popover-label">Duration</span>
+                  <span className="run-health-popover-value">{formatRunDurationForPopover(runHealthPopover.run, refreshClockMs)}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="run-health-popover-empty">Run details unavailable</p>
+            )}
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -2873,6 +3048,39 @@ function runStatusLabel(status: string): string {
     default:
       return "Pending";
   }
+}
+
+function runStatusIcon(status: string): string {
+  const normalized = normalizeStatus(status);
+  if (normalized === "success") return "✓";
+  if (normalized === "failed" || normalized === "canceled") return "✗";
+  if (normalized === "running") return "↻";
+  if (normalized === "queued" || normalized === "pending") return "•";
+  return "•";
+}
+
+function shortRunKey(runKey: string): string {
+  const key = (runKey || "").trim();
+  if (!key) {
+    return "-";
+  }
+  return key.length <= 8 ? key : key.slice(0, 8);
+}
+
+function formatRunDurationForPopover(run: RunSummary, nowMs: number): string {
+  const start = parseTimestamp(run.started_at || run.queued_at);
+  if (start <= 0) {
+    return "-";
+  }
+  const normalized = normalizeStatus(run.status);
+  if (normalized === "running" || normalized === "queued") {
+    return formatDurationMsLargest(Math.max(0, nowMs - start));
+  }
+  const end = parseTimestamp(run.completed_at);
+  if (end > 0 && end >= start) {
+    return formatDurationMsLargest(end - start);
+  }
+  return "-";
 }
 
 function matchesRunQuickFilter(run: RunSummary, filter: RunsQuickFilter): boolean {

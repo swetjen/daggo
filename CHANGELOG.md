@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-07
+- Added light mode with a top-level theme toggle, persistent user preference, and first-load system theme detection while preserving existing dark mode layout/density.
+- Redesigned the Jobs list into a denser operational table with aligned columns, inline enable/disable switches, and simplified row actions.
+- Added run-health histogram tile hover popovers with status, timestamp, duration, and direct navigation to run detail.
+- Updated run-health tile ordering to render oldest on the left and newest on the right.
+- Simplified job detail controls by using the shared iOS-style scheduling switch and removing redundant header labeling.
+- Tightened DAG node and run-step visual legibility by reducing transparency and strengthening state fills across job/run detail canvases.
+- Updated README with planned roadmap items (worker pool/admin coordination, partitions/assets, migration support, and reference integrations).
+
 ## 2026-03-01
 - Simplified the public runtime API to `daggo.Run(...)` and `daggo.Open(...)` as the only canonical startup paths for jobs.
 - Removed the old `daggo.Main(...)`, `daggo.NewApp(...)`, `daggo.WithJobs(...)`, and `daggo.WithRegistry(...)` entrypoints.
