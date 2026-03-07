@@ -1242,12 +1242,6 @@ p {
   color: var(--text-dim);
 }
 
-.run-health-popover-empty {
-  margin: 0;
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-}
-
 @keyframes run-health-spin {
   to {
     transform: rotate(360deg);

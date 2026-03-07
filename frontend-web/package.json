@@ -1,11 +1,11 @@
 {
   "name": "daggo-admin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
-    "build": "bun build ./src/index.html --outdir=dist --sourcemap --target=browser --public-path=/ --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
+    "build": "rm -f dist/index-*.js dist/index-*.js.map dist/index-*.css && bun build ./src/index.html --outdir=dist --sourcemap --target=browser --public-path=/ --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
     "start": "NODE_ENV=production bun src/index.ts"
   },
   "dependencies": {

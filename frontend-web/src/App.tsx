@@ -152,7 +152,7 @@ type AppRoute = {
 };
 
 type RunHealthPopoverState = {
-  run: RunSummary | null;
+  run: RunSummary;
   jobLabel: string;
   left: number;
   top: number;
@@ -848,7 +848,7 @@ export function App() {
   }, []);
 
   const queueRunHealthPopover = useCallback(
-    (target: HTMLElement, run: RunSummary | null, jobLabel: string) => {
+    (target: HTMLElement, run: RunSummary, jobLabel: string) => {
       if (runHealthPopoverHideTimerRef.current !== null) {
         window.clearTimeout(runHealthPopoverHideTimerRef.current);
         runHealthPopoverHideTimerRef.current = null;
@@ -2823,53 +2823,43 @@ export function App() {
             }}
             onMouseLeave={() => scheduleRunHealthPopoverHide()}
             onClick={() => {
-              if (runHealthPopover.run?.run_key) {
-                openRun(runHealthPopover.run.run_key);
-              }
+              openRun(runHealthPopover.run.run_key);
               hideRunHealthPopover();
             }}
-            aria-label={
-              runHealthPopover.run?.run_key
-                ? `Open run ${runHealthPopover.run.run_key}`
-                : "Run details unavailable"
-            }
+            aria-label={`Open run ${runHealthPopover.run.run_key}`}
           >
             <div className="run-health-popover-job">{runHealthPopover.jobLabel}</div>
             <div className="run-health-popover-divider" />
-            {runHealthPopover.run ? (
-              <div className="run-health-popover-rows">
-                <div className="run-health-popover-row">
-                  <span
-                    className={`run-health-popover-icon ${normalizeStatus(runHealthPopover.run.status)} ${
-                      normalizeStatus(runHealthPopover.run.status) === "running" ? "spin" : ""
-                    }`}
-                    aria-hidden="true"
-                  >
-                    {runStatusIcon(normalizeStatus(runHealthPopover.run.status))}
-                  </span>
-                  <span className="run-health-popover-label">Run ID</span>
-                  <code className="run-health-popover-value">{shortRunKey(runHealthPopover.run.run_key)}</code>
-                </div>
-                <div className="run-health-popover-row">
-                  <span className="run-health-popover-icon spacer" aria-hidden="true">
-                    •
-                  </span>
-                  <span className="run-health-popover-label">Timestamp</span>
-                  <span className="run-health-popover-value">
-                    {formatTs(runHealthPopover.run.started_at || runHealthPopover.run.queued_at || runHealthPopover.run.completed_at)}
-                  </span>
-                </div>
-                <div className="run-health-popover-row">
-                  <span className="run-health-popover-icon spacer" aria-hidden="true">
-                    •
-                  </span>
-                  <span className="run-health-popover-label">Duration</span>
-                  <span className="run-health-popover-value">{formatRunDurationForPopover(runHealthPopover.run, refreshClockMs)}</span>
-                </div>
+            <div className="run-health-popover-rows">
+              <div className="run-health-popover-row">
+                <span
+                  className={`run-health-popover-icon ${normalizeStatus(runHealthPopover.run.status)} ${
+                    normalizeStatus(runHealthPopover.run.status) === "running" ? "spin" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  {runStatusIcon(normalizeStatus(runHealthPopover.run.status))}
+                </span>
+                <span className="run-health-popover-label">Run ID</span>
+                <code className="run-health-popover-value">{shortRunKey(runHealthPopover.run.run_key)}</code>
               </div>
-            ) : (
-              <p className="run-health-popover-empty">Run details unavailable</p>
-            )}
+              <div className="run-health-popover-row">
+                <span className="run-health-popover-icon spacer" aria-hidden="true">
+                  •
+                </span>
+                <span className="run-health-popover-label">Timestamp</span>
+                <span className="run-health-popover-value">
+                  {formatTs(runHealthPopover.run.started_at || runHealthPopover.run.queued_at || runHealthPopover.run.completed_at)}
+                </span>
+              </div>
+              <div className="run-health-popover-row">
+                <span className="run-health-popover-icon spacer" aria-hidden="true">
+                  •
+                </span>
+                <span className="run-health-popover-label">Duration</span>
+                <span className="run-health-popover-value">{formatRunDurationForPopover(runHealthPopover.run, refreshClockMs)}</span>
+              </div>
+            </div>
           </button>
         ) : null}
       </div>

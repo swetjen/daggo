@@ -28,4 +28,3 @@ Frontend styles are implemented in `frontend-web/src/index.css`, with the v2 ove
 
 Logo assets:
 - `frontend-web/src/assets/daggo.png` is the active dark-mode logo.
-- `frontend-web/src/assets/daggo-white.png` is reserved for future light-mode switching.

@@ -24,10 +24,4 @@ func main() {
 	if err := api.WriteFrontendClient(router); err != nil {
 		log.Fatal(err)
 	}
-	if err := router.WriteClientTSFile("client.gen.ts"); err != nil {
-		log.Fatal(err)
-	}
-	if err := router.WriteClientPYFile("client.gen.py"); err != nil {
-		log.Fatal(err)
-	}
 }

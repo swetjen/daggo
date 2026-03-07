@@ -8,6 +8,9 @@
 - Simplified job detail controls by using the shared iOS-style scheduling switch and removing redundant header labeling.
 - Tightened DAG node and run-step visual legibility by reducing transparency and strengthening state fills across job/run detail canvases.
 - Updated README with planned roadmap items (worker pool/admin coordination, partitions/assets, migration support, and reference integrations).
+- Cleaned up frontend assets by removing stale hashed `dist` bundles and wiring the build to clear old `index-*` outputs before generating new assets.
+- Removed unused root-generated SDK artifacts (`client.gen.ts`, `client.gen.py`) and kept SDK generation focused on the frontend JS client.
+- Bumped the frontend package minor version to `0.5.0`.
 
 ## 2026-03-01
 - Simplified the public runtime API to `daggo.Run(...)` and `daggo.Open(...)` as the only canonical startup paths for jobs.
