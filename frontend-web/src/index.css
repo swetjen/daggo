@@ -1355,6 +1355,240 @@ p {
   color: #36433d;
 }
 
+.backfill-control-card,
+.backfill-status-card {
+  display: grid;
+  gap: 8px;
+}
+
+.backfill-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.backfill-card-head .muted {
+  margin-left: auto;
+}
+
+.backfill-mode-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.backfill-mode-option {
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  background: var(--button-bg);
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+  line-height: 1;
+  min-height: 26px;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.backfill-mode-option:hover,
+.backfill-mode-option:focus-visible {
+  outline: none;
+  border-color: var(--border-strong);
+  background: var(--button-hover-bg);
+  color: var(--text-primary);
+}
+
+.backfill-mode-option.active {
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.backfill-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.69rem;
+  color: var(--text-secondary);
+}
+
+.backfill-field input,
+.backfill-field select,
+.backfill-field textarea {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.backfill-field textarea {
+  resize: vertical;
+  min-height: 68px;
+}
+
+.backfill-field small {
+  color: var(--text-muted);
+}
+
+.backfill-range-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.backfill-policy-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+}
+
+.backfill-launch-btn {
+  width: fit-content;
+}
+
+.backfill-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.backfill-list-item {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.backfill-list-item:hover,
+.backfill-list-item:focus-visible {
+  outline: none;
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.backfill-list-item.active {
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+}
+
+.backfill-list-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backfill-list-item small {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+}
+
+.backfill-status-badge {
+  margin-left: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.backfill-status-badge.running {
+  border-color: color-mix(in srgb, var(--state-running) 55%, var(--border-default));
+  color: var(--state-running);
+}
+
+.backfill-status-badge.queued,
+.backfill-status-badge.pending {
+  border-color: color-mix(in srgb, var(--state-queued) 45%, var(--border-default));
+  color: var(--state-queued);
+}
+
+.backfill-status-badge.completed {
+  border-color: color-mix(in srgb, var(--state-success) 55%, var(--border-default));
+  color: var(--state-success);
+}
+
+.backfill-status-badge.failed,
+.backfill-status-badge.canceled {
+  border-color: color-mix(in srgb, var(--state-error) 55%, var(--border-default));
+  color: var(--state-error);
+}
+
+.backfill-detail {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.backfill-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backfill-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+}
+
+.backfill-partition-list {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.backfill-partition-row {
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+}
+
+.backfill-partition-row code {
+  color: var(--text-primary);
+  font-size: 0.67rem;
+}
+
+.backfill-partition-status {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.backfill-partition-status.materialized {
+  color: var(--state-success);
+}
+
+.backfill-partition-status.failed_downstream {
+  color: var(--state-error);
+}
+
+.backfill-partition-status.requested {
+  color: var(--state-running);
+}
+
+.backfill-partition-status.targeted {
+  color: var(--state-queued);
+}
+
 .job-schedule-list {
   list-style: none;
   margin: 0;
@@ -2796,6 +3030,12 @@ p {
   }
 
   .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .backfill-mode-picker,
+  .backfill-policy-row,
+  .backfill-range-fields {
     grid-template-columns: 1fr;
   }
 

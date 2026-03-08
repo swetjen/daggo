@@ -35,7 +35,7 @@ The runs view gives a run-centric history with filtering and drill-in diagnostic
 ## Planned Work
 
 - Robust worker pool implementation and coordination from the DAGGO admin.
-- Support for data partitions, assets, and management.
+- Continue the partitions/assets rollout (backend foundations are in place; UI and asset workflows are in progress).
 - Migration support for coming from Dagster and similar tools.
 - Reference integrations with BigQuery, Databricks, and similar platforms.
 

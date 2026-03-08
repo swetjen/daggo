@@ -324,6 +324,191 @@ func (s *PostgresStore) RunEventCountByRunID(ctx context.Context, runID int64) (
 	return s.queries.RunEventCountByRunID(ctx, runID)
 }
 
+func (s *PostgresStore) BackfillGetMany(ctx context.Context, arg BackfillGetManyParams) ([]Backfill, error) {
+	rows, err := s.queries.BackfillGetMany(ctx, postgresgen.BackfillGetManyParams{
+		Limit:  int32(arg.Limit),
+		Offset: int32(arg.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresBackfill), nil
+}
+
+func (s *PostgresStore) BackfillCount(ctx context.Context) (int64, error) {
+	return s.queries.BackfillCount(ctx)
+}
+
+func (s *PostgresStore) BackfillGetManyByJobID(ctx context.Context, arg BackfillGetManyByJobIDParams) ([]Backfill, error) {
+	rows, err := s.queries.BackfillGetManyByJobID(ctx, postgresgen.BackfillGetManyByJobIDParams{
+		JobID:  arg.JobID,
+		Limit:  int32(arg.Limit),
+		Offset: int32(arg.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresBackfill), nil
+}
+
+func (s *PostgresStore) BackfillCountByJobID(ctx context.Context, jobID int64) (int64, error) {
+	return s.queries.BackfillCountByJobID(ctx, jobID)
+}
+
+func (s *PostgresStore) BackfillGetByKey(ctx context.Context, backfillKey string) (Backfill, error) {
+	row, err := s.queries.BackfillGetByKey(ctx, backfillKey)
+	if err != nil {
+		return Backfill{}, err
+	}
+	return fromPostgresBackfill(row), nil
+}
+
+func (s *PostgresStore) BackfillCreate(ctx context.Context, arg BackfillCreateParams) (Backfill, error) {
+	row, err := s.queries.BackfillCreate(ctx, postgresgen.BackfillCreateParams{
+		BackfillKey:             arg.BackfillKey,
+		JobID:                   arg.JobID,
+		PartitionDefinitionID:   arg.PartitionDefinitionID,
+		Status:                  arg.Status,
+		SelectionMode:           arg.SelectionMode,
+		SelectionJson:           []byte(arg.SelectionJson),
+		TriggeredBy:             arg.TriggeredBy,
+		PolicyMode:              arg.PolicyMode,
+		MaxPartitionsPerRun:     arg.MaxPartitionsPerRun,
+		RequestedPartitionCount: arg.RequestedPartitionCount,
+		RequestedRunCount:       arg.RequestedRunCount,
+		CompletedPartitionCount: arg.CompletedPartitionCount,
+		FailedPartitionCount:    arg.FailedPartitionCount,
+		ErrorMessage:            arg.ErrorMessage,
+		StartedAt:               toNullTime(arg.StartedAt),
+		CompletedAt:             toNullTime(arg.CompletedAt),
+	})
+	if err != nil {
+		return Backfill{}, err
+	}
+	return fromPostgresBackfill(row), nil
+}
+
+func (s *PostgresStore) BackfillPartitionGetManyByBackfillID(ctx context.Context, arg BackfillPartitionGetManyByBackfillIDParams) ([]BackfillPartition, error) {
+	rows, err := s.queries.BackfillPartitionGetManyByBackfillID(ctx, postgresgen.BackfillPartitionGetManyByBackfillIDParams{
+		BackfillID: arg.BackfillID,
+		Limit:      int32(arg.Limit),
+		Offset:     int32(arg.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresBackfillPartition), nil
+}
+
+func (s *PostgresStore) BackfillPartitionCountByBackfillID(ctx context.Context, backfillID int64) (int64, error) {
+	return s.queries.BackfillPartitionCountByBackfillID(ctx, backfillID)
+}
+
+func (s *PostgresStore) BackfillPartitionCountByBackfillIDAndStatus(ctx context.Context, arg BackfillPartitionCountByBackfillIDAndStatusParams) (int64, error) {
+	return s.queries.BackfillPartitionCountByBackfillIDAndStatus(ctx, postgresgen.BackfillPartitionCountByBackfillIDAndStatusParams{
+		BackfillID: arg.BackfillID,
+		Status:     arg.Status,
+	})
+}
+
+func (s *PostgresStore) BackfillPartitionUpsert(ctx context.Context, arg BackfillPartitionUpsertParams) (BackfillPartition, error) {
+	row, err := s.queries.BackfillPartitionUpsert(ctx, postgresgen.BackfillPartitionUpsertParams{
+		BackfillID:   arg.BackfillID,
+		PartitionKey: arg.PartitionKey,
+		Status:       arg.Status,
+		RunID:        arg.RunID,
+		ErrorMessage: arg.ErrorMessage,
+	})
+	if err != nil {
+		return BackfillPartition{}, err
+	}
+	return fromPostgresBackfillPartition(row), nil
+}
+
+func (s *PostgresStore) BackfillPartitionUpdateStatusByBackfillIDAndPartitionKey(ctx context.Context, arg BackfillPartitionUpdateStatusByBackfillIDAndPartitionKeyParams) (BackfillPartition, error) {
+	row, err := s.queries.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKey(ctx, postgresgen.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKeyParams{
+		Status:       arg.Status,
+		RunID:        arg.RunID,
+		ErrorMessage: arg.ErrorMessage,
+		BackfillID:   arg.BackfillID,
+		PartitionKey: arg.PartitionKey,
+	})
+	if err != nil {
+		return BackfillPartition{}, err
+	}
+	return fromPostgresBackfillPartition(row), nil
+}
+
+func (s *PostgresStore) RunPartitionTargetGetManyByBackfillKey(ctx context.Context, arg RunPartitionTargetGetManyByBackfillKeyParams) ([]RunPartitionTarget, error) {
+	rows, err := s.queries.RunPartitionTargetGetManyByBackfillKey(ctx, postgresgen.RunPartitionTargetGetManyByBackfillKeyParams{
+		BackfillKey: arg.BackfillKey,
+		Limit:       int32(arg.Limit),
+		Offset:      int32(arg.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresRunPartitionTarget), nil
+}
+
+func (s *PostgresStore) RunPartitionTargetUpsert(ctx context.Context, arg RunPartitionTargetUpsertParams) (RunPartitionTarget, error) {
+	row, err := s.queries.RunPartitionTargetUpsert(ctx, postgresgen.RunPartitionTargetUpsertParams{
+		RunID:                 arg.RunID,
+		PartitionDefinitionID: arg.PartitionDefinitionID,
+		SelectionMode:         arg.SelectionMode,
+		PartitionKey:          arg.PartitionKey,
+		RangeStartKey:         arg.RangeStartKey,
+		RangeEndKey:           arg.RangeEndKey,
+		PartitionSubsetJson:   []byte(arg.PartitionSubsetJson),
+		TagsJson:              []byte(arg.TagsJson),
+		BackfillKey:           arg.BackfillKey,
+	})
+	if err != nil {
+		return RunPartitionTarget{}, err
+	}
+	return fromPostgresRunPartitionTarget(row), nil
+}
+
+func (s *PostgresStore) RunSystemTagUpsert(ctx context.Context, arg RunSystemTagUpsertParams) (RunSystemTag, error) {
+	row, err := s.queries.RunSystemTagUpsert(ctx, postgresgen.RunSystemTagUpsertParams{
+		RunID:    arg.RunID,
+		TagKey:   arg.TagKey,
+		TagValue: arg.TagValue,
+	})
+	if err != nil {
+		return RunSystemTag{}, err
+	}
+	return fromPostgresRunSystemTag(row), nil
+}
+
+func (s *PostgresStore) PartitionDefinitionGetByJobIDAndTarget(ctx context.Context, arg PartitionDefinitionGetByJobIDAndTargetParams) (PartitionDefinition, error) {
+	row, err := s.queries.PartitionDefinitionGetByJobIDAndTarget(ctx, postgresgen.PartitionDefinitionGetByJobIDAndTargetParams{
+		JobID:      arg.JobID,
+		TargetKind: arg.TargetKind,
+		TargetKey:  arg.TargetKey,
+	})
+	if err != nil {
+		return PartitionDefinition{}, err
+	}
+	return fromPostgresPartitionDefinition(row), nil
+}
+
+func (s *PostgresStore) PartitionKeyGetManyByDefinitionID(ctx context.Context, arg PartitionKeyGetManyByDefinitionIDParams) ([]PartitionKey, error) {
+	rows, err := s.queries.PartitionKeyGetManyByDefinitionID(ctx, postgresgen.PartitionKeyGetManyByDefinitionIDParams{
+		PartitionDefinitionID: arg.PartitionDefinitionID,
+		Limit:                 int32(arg.Limit),
+		Offset:                int32(arg.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresPartitionKey), nil
+}
+
+func (s *PostgresStore) PartitionKeyCountByDefinitionID(ctx context.Context, partitionDefinitionID int64) (int64, error) {
+	return s.queries.PartitionKeyCountByDefinitionID(ctx, partitionDefinitionID)
+}
+
 func (s *PostgresStore) SchedulerHeartbeatUpsert(ctx context.Context, arg SchedulerHeartbeatUpsertParams) (SchedulerHeartbeat, error) {
 	row, err := s.queries.SchedulerHeartbeatUpsert(ctx, postgresgen.SchedulerHeartbeatUpsertParams{
 		SchedulerKey:        arg.SchedulerKey,
@@ -575,6 +760,95 @@ func fromPostgresRunEvent(row postgresgen.RunEvent) RunEvent {
 		Message:       row.Message,
 		EventDataJson: fromRawJSON(row.EventDataJson),
 		CreatedAt:     formatTime(row.CreatedAt),
+	}
+}
+
+func fromPostgresBackfill(row postgresgen.Backfill) Backfill {
+	return Backfill{
+		ID:                      row.ID,
+		BackfillKey:             row.BackfillKey,
+		JobID:                   row.JobID,
+		PartitionDefinitionID:   row.PartitionDefinitionID,
+		Status:                  row.Status,
+		SelectionMode:           row.SelectionMode,
+		SelectionJson:           fromRawJSON(row.SelectionJson),
+		TriggeredBy:             row.TriggeredBy,
+		PolicyMode:              row.PolicyMode,
+		MaxPartitionsPerRun:     row.MaxPartitionsPerRun,
+		RequestedPartitionCount: row.RequestedPartitionCount,
+		RequestedRunCount:       row.RequestedRunCount,
+		CompletedPartitionCount: row.CompletedPartitionCount,
+		FailedPartitionCount:    row.FailedPartitionCount,
+		ErrorMessage:            row.ErrorMessage,
+		StartedAt:               formatNullTime(row.StartedAt),
+		CompletedAt:             formatNullTime(row.CompletedAt),
+		CreatedAt:               formatTime(row.CreatedAt),
+		UpdatedAt:               formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresBackfillPartition(row postgresgen.BackfillPartition) BackfillPartition {
+	return BackfillPartition{
+		ID:           row.ID,
+		BackfillID:   row.BackfillID,
+		PartitionKey: row.PartitionKey,
+		Status:       row.Status,
+		RunID:        row.RunID,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresPartitionDefinition(row postgresgen.PartitionDefinition) PartitionDefinition {
+	return PartitionDefinition{
+		ID:             row.ID,
+		JobID:          row.JobID,
+		TargetKind:     row.TargetKind,
+		TargetKey:      row.TargetKey,
+		DefinitionKind: row.DefinitionKind,
+		DefinitionJson: fromRawJSON(row.DefinitionJson),
+		Enabled:        boolToInt64(row.Enabled),
+		CreatedAt:      formatTime(row.CreatedAt),
+		UpdatedAt:      formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresPartitionKey(row postgresgen.PartitionKey) PartitionKey {
+	return PartitionKey{
+		ID:                    row.ID,
+		PartitionDefinitionID: row.PartitionDefinitionID,
+		PartitionKey:          row.PartitionKey,
+		SortIndex:             row.SortIndex,
+		IsActive:              boolToInt64(row.IsActive),
+		CreatedAt:             formatTime(row.CreatedAt),
+		UpdatedAt:             formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresRunPartitionTarget(row postgresgen.RunPartitionTarget) RunPartitionTarget {
+	return RunPartitionTarget{
+		RunID:                 row.RunID,
+		PartitionDefinitionID: row.PartitionDefinitionID,
+		SelectionMode:         row.SelectionMode,
+		PartitionKey:          row.PartitionKey,
+		RangeStartKey:         row.RangeStartKey,
+		RangeEndKey:           row.RangeEndKey,
+		PartitionSubsetJson:   fromRawJSON(row.PartitionSubsetJson),
+		TagsJson:              fromRawJSON(row.TagsJson),
+		BackfillKey:           row.BackfillKey,
+		CreatedAt:             formatTime(row.CreatedAt),
+		UpdatedAt:             formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresRunSystemTag(row postgresgen.RunSystemTag) RunSystemTag {
+	return RunSystemTag{
+		ID:        row.ID,
+		RunID:     row.RunID,
+		TagKey:    row.TagKey,
+		TagValue:  row.TagValue,
+		CreatedAt: formatTime(row.CreatedAt),
 	}
 }
 

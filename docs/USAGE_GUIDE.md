@@ -255,6 +255,36 @@ cfg.Database.Postgres.Schema = "my_project"
 cfg.Database.Postgres.SSLMode = "require"
 ```
 
+## Experimental Partitions + Backfills
+
+DAGGO now includes partition/backfill foundations, launch/status RPC primitives, and initial admin UI integration.
+
+Current backfill RPC routes:
+
+- `/rpc/backfills/backfill-launch`
+- `/rpc/backfills/backfills-get-many`
+- `/rpc/backfills/backfill-by-key`
+
+Current behavior:
+
+- Partition definitions and keys are stored in DB metadata tables.
+- Backfill launch validates partition selections and applies guardrails.
+- Launch persists:
+  - backfill records + partition subset rows
+  - per-run partition targeting metadata
+  - system run tags for partition/backfill context
+- Status endpoints expose aggregate subset accounting and completion signals.
+- Job detail UI now includes:
+  - selection controls (`all`, `single`, `range`, `subset`)
+  - launch controls (`multi_run` + max-per-run, `single_run`)
+  - recent backfill status list and partition-status detail panel
+
+Current limitations:
+
+- Partition key introspection/auto-complete is not exposed in UI yet (keys are entered directly for single/range/subset selection).
+- Asset-level orchestration semantics are still evolving.
+- Mapping/lineage APIs are available in package-level domain code, with UI/API exposure expanding incrementally.
+
 Important behavior:
 
 - SQLite remains the default unless the driver is explicitly set to `postgres`.

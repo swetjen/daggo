@@ -117,6 +117,10 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 	handleRPC(router, handlerSet.Jobs.JobByKey, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobSchedulingUpdate, routeGuard)
 
+	handleRPC(router, handlerSet.Backfills.BackfillsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Backfills.BackfillByKey, routeGuard)
+	handleRPC(router, handlerSet.Backfills.BackfillLaunch, routeGuard)
+
 	handleRPC(router, handlerSet.Runs.RunCreate, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunRerunStepCreate, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunsGetMany, routeGuard)

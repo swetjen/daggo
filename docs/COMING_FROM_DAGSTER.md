@@ -56,7 +56,12 @@ DAGGO uses an operator-focused shell:
 
 - No Dagster compatibility target (DB, GraphQL, or UI parity).
 - Asset lineage view is not a v1 focus.
-- Backfills/partitions and richer deployment topologies are incremental work.
+- Backfills/partitions are now in incremental backend rollout:
+  - partition/backfill storage model is in place
+  - partition selection + launch planning exists
+  - backfill launch/status RPC flows exist
+  - initial job-detail UI wiring exists (selection + launch + status panels)
+  - full Dagster-equivalent asset workflows are still in progress
 - Multi-tenant orchestration is not a current goal.
 
 ## Migration Approach

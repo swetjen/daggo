@@ -10,6 +10,39 @@ import (
 	"time"
 )
 
+type Backfill struct {
+	ID                      int64           `json:"id"`
+	BackfillKey             string          `json:"backfill_key"`
+	JobID                   int64           `json:"job_id"`
+	PartitionDefinitionID   int64           `json:"partition_definition_id"`
+	Status                  string          `json:"status"`
+	SelectionMode           string          `json:"selection_mode"`
+	SelectionJson           json.RawMessage `json:"selection_json"`
+	TriggeredBy             string          `json:"triggered_by"`
+	PolicyMode              string          `json:"policy_mode"`
+	MaxPartitionsPerRun     int64           `json:"max_partitions_per_run"`
+	RequestedPartitionCount int64           `json:"requested_partition_count"`
+	RequestedRunCount       int64           `json:"requested_run_count"`
+	CompletedPartitionCount int64           `json:"completed_partition_count"`
+	FailedPartitionCount    int64           `json:"failed_partition_count"`
+	ErrorMessage            string          `json:"error_message"`
+	StartedAt               sql.NullTime    `json:"started_at"`
+	CompletedAt             sql.NullTime    `json:"completed_at"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
+}
+
+type BackfillPartition struct {
+	ID           int64     `json:"id"`
+	BackfillID   int64     `json:"backfill_id"`
+	PartitionKey string    `json:"partition_key"`
+	Status       string    `json:"status"`
+	RunID        int64     `json:"run_id"`
+	ErrorMessage string    `json:"error_message"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type Job struct {
 	ID                int64           `json:"id"`
 	JobKey            string          `json:"job_key"`
@@ -40,6 +73,28 @@ type JobNode struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+type PartitionDefinition struct {
+	ID             int64           `json:"id"`
+	JobID          int64           `json:"job_id"`
+	TargetKind     string          `json:"target_kind"`
+	TargetKey      string          `json:"target_key"`
+	DefinitionKind string          `json:"definition_kind"`
+	DefinitionJson json.RawMessage `json:"definition_json"`
+	Enabled        bool            `json:"enabled"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+type PartitionKey struct {
+	ID                    int64     `json:"id"`
+	PartitionDefinitionID int64     `json:"partition_definition_id"`
+	PartitionKey          string    `json:"partition_key"`
+	SortIndex             int64     `json:"sort_index"`
+	IsActive              bool      `json:"is_active"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
 type Run struct {
 	ID           int64           `json:"id"`
 	RunKey       string          `json:"run_key"`
@@ -68,6 +123,20 @@ type RunEvent struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
+type RunPartitionTarget struct {
+	RunID                 int64           `json:"run_id"`
+	PartitionDefinitionID int64           `json:"partition_definition_id"`
+	SelectionMode         string          `json:"selection_mode"`
+	PartitionKey          string          `json:"partition_key"`
+	RangeStartKey         string          `json:"range_start_key"`
+	RangeEndKey           string          `json:"range_end_key"`
+	PartitionSubsetJson   json.RawMessage `json:"partition_subset_json"`
+	TagsJson              json.RawMessage `json:"tags_json"`
+	BackfillKey           string          `json:"backfill_key"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+}
+
 type RunStep struct {
 	ID           int64           `json:"id"`
 	RunID        int64           `json:"run_id"`
@@ -83,6 +152,14 @@ type RunStep struct {
 	LogExcerpt   string          `json:"log_excerpt"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type RunSystemTag struct {
+	ID        int64     `json:"id"`
+	RunID     int64     `json:"run_id"`
+	TagKey    string    `json:"tag_key"`
+	TagValue  string    `json:"tag_value"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type SchedulerHeartbeat struct {
