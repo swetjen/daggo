@@ -79,6 +79,12 @@ type exParallelJoinOutput struct {
 	Done bool `json:"done"`
 }
 
+type exPartitionMetaOutput struct {
+	Mode        string `json:"mode"`
+	KeyCount    int    `json:"key_count"`
+	BackfillKey string `json:"backfill_key"`
+}
+
 func TestExecutorExecuteRun_HappyPath(t *testing.T) {
 	source := Op[NoInput, exSourceOutput]("source", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 21}, nil
@@ -808,6 +814,194 @@ func TestExecutorQueue_ConcurrentRuns(t *testing.T) {
 	}
 }
 
+func TestExecutorExecuteRun_PopulatesRunPartitionMeta(t *testing.T) {
+	step := Op[NoInput, exPartitionMetaOutput]("inspect", func(ctx context.Context, _ NoInput) (exPartitionMetaOutput, error) {
+		meta, ok := RunPartitionMetaFromContext(ctx)
+		if !ok {
+			return exPartitionMetaOutput{}, fmt.Errorf("missing partition metadata in context")
+		}
+		if meta.SelectionMode != PartitionSelectionModeRange {
+			return exPartitionMetaOutput{}, fmt.Errorf("expected range mode, got %q", meta.SelectionMode)
+		}
+		if len(meta.Keys) != 2 {
+			return exPartitionMetaOutput{}, fmt.Errorf("expected 2 partition keys, got %d", len(meta.Keys))
+		}
+		if meta.BackfillKey != "bf_executor_partition_meta" {
+			return exPartitionMetaOutput{}, fmt.Errorf("expected backfill key bf_executor_partition_meta, got %q", meta.BackfillKey)
+		}
+		return exPartitionMetaOutput{
+			Mode:        string(meta.SelectionMode),
+			KeyCount:    len(meta.Keys),
+			BackfillKey: meta.BackfillKey,
+		}, nil
+	})
+	job := NewJob("executor_partition_meta").Add(step).MustBuild()
+
+	ctx, queries, executor := newExecutorTestHarness(t, job)
+	run := createRunWithPendingSteps(t, ctx, queries, job.Key, 0, "", "{}")
+	definition := mustCreatePartitionDefinitionForStep(t, ctx, queries, job.Key, "inspect", []string{"2026-03-01", "2026-03-02"})
+
+	if _, err := queries.RunPartitionTargetUpsert(ctx, db.RunPartitionTargetUpsertParams{
+		RunID:                 run.ID,
+		PartitionDefinitionID: definition.ID,
+		SelectionMode:         string(PartitionSelectionModeRange),
+		PartitionKey:          "",
+		RangeStartKey:         "2026-03-01",
+		RangeEndKey:           "2026-03-02",
+		PartitionSubsetJson:   `["2026-03-01","2026-03-02"]`,
+		TagsJson:              "{}",
+		BackfillKey:           "bf_executor_partition_meta",
+	}); err != nil {
+		t.Fatalf("create run partition target: %v", err)
+	}
+
+	if err := executor.executeRun(ctx, run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+
+	stepRows, err := queries.RunStepGetManyByRunID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("load run steps: %v", err)
+	}
+	row := mustFindRunStep(t, stepRows, "inspect")
+	if row.Status != "success" {
+		t.Fatalf("expected inspect step success, got %q (%s)", row.Status, row.ErrorMessage)
+	}
+
+	var output exPartitionMetaOutput
+	if err := json.Unmarshal([]byte(row.OutputJson), &output); err != nil {
+		t.Fatalf("decode inspect step output: %v", err)
+	}
+	if output.Mode != string(PartitionSelectionModeRange) {
+		t.Fatalf("expected mode %q, got %q", PartitionSelectionModeRange, output.Mode)
+	}
+	if output.KeyCount != 2 {
+		t.Fatalf("expected key_count=2, got %d", output.KeyCount)
+	}
+	if output.BackfillKey != "bf_executor_partition_meta" {
+		t.Fatalf("expected backfill key bf_executor_partition_meta, got %q", output.BackfillKey)
+	}
+}
+
+func TestExecutorExecuteRun_ReconcilesBackfillStateOnSuccess(t *testing.T) {
+	step := Op[NoInput, exSourceOutput]("step", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+		return exSourceOutput{Value: 1}, nil
+	})
+	job := NewJob("executor_backfill_success").Add(step).MustBuild()
+
+	ctx, queries, executor := newExecutorTestHarness(t, job)
+	run := createRunWithPendingSteps(t, ctx, queries, job.Key, 0, "", "{}")
+	definition := mustCreatePartitionDefinitionForStep(t, ctx, queries, job.Key, "step", []string{"2026-03-01"})
+	backfill := mustAttachBackfillTrackingToRun(t, ctx, queries, job.Key, run.ID, definition.ID, "bf_executor_success", []string{"2026-03-01"})
+
+	if err := executor.executeRun(ctx, run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+
+	backfillRow, err := queries.BackfillGetByKey(ctx, "bf_executor_success")
+	if err != nil {
+		t.Fatalf("load backfill: %v", err)
+	}
+	if backfillRow.Status != "completed" {
+		t.Fatalf("expected backfill status completed, got %q", backfillRow.Status)
+	}
+	if backfillRow.CompletedPartitionCount != 1 {
+		t.Fatalf("expected completed partition count 1, got %d", backfillRow.CompletedPartitionCount)
+	}
+	if backfillRow.FailedPartitionCount != 0 {
+		t.Fatalf("expected failed partition count 0, got %d", backfillRow.FailedPartitionCount)
+	}
+	if strings.TrimSpace(backfillRow.CompletedAt) == "" {
+		t.Fatalf("expected completed_at to be set")
+	}
+	if strings.TrimSpace(backfillRow.ErrorMessage) != "" {
+		t.Fatalf("expected empty backfill error message, got %q", backfillRow.ErrorMessage)
+	}
+
+	partitions, err := queries.BackfillPartitionGetManyByBackfillID(ctx, db.BackfillPartitionGetManyByBackfillIDParams{
+		BackfillID: backfill.ID,
+		Limit:      10,
+		Offset:     0,
+	})
+	if err != nil {
+		t.Fatalf("load backfill partitions: %v", err)
+	}
+	if len(partitions) != 1 {
+		t.Fatalf("expected 1 backfill partition, got %d", len(partitions))
+	}
+	if partitions[0].Status != "materialized" {
+		t.Fatalf("expected partition status materialized, got %q", partitions[0].Status)
+	}
+	if partitions[0].RunID != run.ID {
+		t.Fatalf("expected partition run_id=%d, got %d", run.ID, partitions[0].RunID)
+	}
+}
+
+func TestExecutorExecuteRun_ReconcilesBackfillStateOnFailure(t *testing.T) {
+	step := Op[NoInput, exSourceOutput]("step", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
+		return exSourceOutput{}, fmt.Errorf("intentional failure")
+	})
+	job := NewJob("executor_backfill_failure").Add(step).MustBuild()
+
+	ctx, queries, executor := newExecutorTestHarness(t, job)
+	run := createRunWithPendingSteps(t, ctx, queries, job.Key, 0, "", "{}")
+	definition := mustCreatePartitionDefinitionForStep(t, ctx, queries, job.Key, "step", []string{"2026-03-01"})
+	backfill := mustAttachBackfillTrackingToRun(t, ctx, queries, job.Key, run.ID, definition.ID, "bf_executor_failure", []string{"2026-03-01"})
+
+	if err := executor.executeRun(ctx, run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+
+	runRow, err := queries.RunGetByID(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if runRow.Status != "failed" {
+		t.Fatalf("expected run status failed, got %q", runRow.Status)
+	}
+
+	backfillRow, err := queries.BackfillGetByKey(ctx, "bf_executor_failure")
+	if err != nil {
+		t.Fatalf("load backfill: %v", err)
+	}
+	if backfillRow.Status != "failed" {
+		t.Fatalf("expected backfill status failed, got %q", backfillRow.Status)
+	}
+	if backfillRow.CompletedPartitionCount != 0 {
+		t.Fatalf("expected completed partition count 0, got %d", backfillRow.CompletedPartitionCount)
+	}
+	if backfillRow.FailedPartitionCount != 1 {
+		t.Fatalf("expected failed partition count 1, got %d", backfillRow.FailedPartitionCount)
+	}
+	if strings.TrimSpace(backfillRow.CompletedAt) == "" {
+		t.Fatalf("expected completed_at to be set")
+	}
+	if !strings.Contains(backfillRow.ErrorMessage, "intentional failure") {
+		t.Fatalf("expected backfill error message to include run failure, got %q", backfillRow.ErrorMessage)
+	}
+
+	partitions, err := queries.BackfillPartitionGetManyByBackfillID(ctx, db.BackfillPartitionGetManyByBackfillIDParams{
+		BackfillID: backfill.ID,
+		Limit:      10,
+		Offset:     0,
+	})
+	if err != nil {
+		t.Fatalf("load backfill partitions: %v", err)
+	}
+	if len(partitions) != 1 {
+		t.Fatalf("expected 1 backfill partition, got %d", len(partitions))
+	}
+	if partitions[0].Status != "failed_downstream" {
+		t.Fatalf("expected partition status failed_downstream, got %q", partitions[0].Status)
+	}
+	if partitions[0].RunID != run.ID {
+		t.Fatalf("expected partition run_id=%d, got %d", run.ID, partitions[0].RunID)
+	}
+	if !strings.Contains(partitions[0].ErrorMessage, "intentional failure") {
+		t.Fatalf("expected partition error to include run failure, got %q", partitions[0].ErrorMessage)
+	}
+}
+
 func TestExecutorQueue_SubprocessLaunchFailureMarksRunFailed(t *testing.T) {
 	step := Op[NoInput, exSourceOutput]("op", func(_ context.Context, _ NoInput) (exSourceOutput, error) {
 		return exSourceOutput{Value: 1}, nil
@@ -1060,6 +1254,141 @@ func createRunWithPendingSteps(
 		}
 	}
 	return run
+}
+
+func mustCreatePartitionDefinitionForStep(
+	t *testing.T,
+	ctx context.Context,
+	queries *db.Queries,
+	jobKey string,
+	stepKey string,
+	keys []string,
+) db.PartitionDefinition {
+	t.Helper()
+	jobRow, err := queries.JobGetByKey(ctx, jobKey)
+	if err != nil {
+		t.Fatalf("load job %q: %v", jobKey, err)
+	}
+	definition, err := queries.PartitionDefinitionUpsert(ctx, db.PartitionDefinitionUpsertParams{
+		JobID:          jobRow.ID,
+		TargetKind:     "op",
+		TargetKey:      stepKey,
+		DefinitionKind: "static",
+		DefinitionJson: "{}",
+		Enabled:        1,
+	})
+	if err != nil {
+		t.Fatalf("upsert partition definition: %v", err)
+	}
+	for index, key := range keys {
+		if _, err := queries.PartitionKeyUpsert(ctx, db.PartitionKeyUpsertParams{
+			PartitionDefinitionID: definition.ID,
+			PartitionKey:          key,
+			SortIndex:             int64(index),
+			IsActive:              1,
+		}); err != nil {
+			t.Fatalf("upsert partition key %q: %v", key, err)
+		}
+	}
+	return definition
+}
+
+func mustAttachBackfillTrackingToRun(
+	t *testing.T,
+	ctx context.Context,
+	queries *db.Queries,
+	jobKey string,
+	runID int64,
+	partitionDefinitionID int64,
+	backfillKey string,
+	partitionKeys []string,
+) db.Backfill {
+	t.Helper()
+	if len(partitionKeys) == 0 {
+		t.Fatalf("partitionKeys must not be empty")
+	}
+
+	jobRow, err := queries.JobGetByKey(ctx, jobKey)
+	if err != nil {
+		t.Fatalf("load job %q: %v", jobKey, err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	selectionJSONBytes, err := json.Marshal(map[string]any{
+		"mode": "subset",
+		"keys": partitionKeys,
+	})
+	if err != nil {
+		t.Fatalf("marshal selection json: %v", err)
+	}
+
+	backfill, err := queries.BackfillCreate(ctx, db.BackfillCreateParams{
+		BackfillKey:             backfillKey,
+		JobID:                   jobRow.ID,
+		PartitionDefinitionID:   partitionDefinitionID,
+		Status:                  "running",
+		SelectionMode:           "subset",
+		SelectionJson:           string(selectionJSONBytes),
+		TriggeredBy:             "unit-test",
+		PolicyMode:              "multi_run",
+		MaxPartitionsPerRun:     int64(len(partitionKeys)),
+		RequestedPartitionCount: int64(len(partitionKeys)),
+		RequestedRunCount:       1,
+		CompletedPartitionCount: 0,
+		FailedPartitionCount:    0,
+		ErrorMessage:            "",
+		StartedAt:               now,
+		CompletedAt:             "",
+	})
+	if err != nil {
+		t.Fatalf("create backfill: %v", err)
+	}
+
+	for _, key := range partitionKeys {
+		if _, err := queries.BackfillPartitionUpsert(ctx, db.BackfillPartitionUpsertParams{
+			BackfillID:   backfill.ID,
+			PartitionKey: key,
+			Status:       "requested",
+			RunID:        runID,
+			ErrorMessage: "",
+		}); err != nil {
+			t.Fatalf("upsert backfill partition %q: %v", key, err)
+		}
+	}
+
+	selectionMode := string(PartitionSelectionModeSubset)
+	partitionKey := ""
+	rangeStartKey := ""
+	rangeEndKey := ""
+	if len(partitionKeys) == 1 {
+		selectionMode = string(PartitionSelectionModeSingle)
+		partitionKey = partitionKeys[0]
+		rangeStartKey = partitionKeys[0]
+		rangeEndKey = partitionKeys[0]
+	} else {
+		selectionMode = string(PartitionSelectionModeRange)
+		rangeStartKey = partitionKeys[0]
+		rangeEndKey = partitionKeys[len(partitionKeys)-1]
+	}
+	subsetJSONBytes, err := json.Marshal(partitionKeys)
+	if err != nil {
+		t.Fatalf("marshal partition subset json: %v", err)
+	}
+	if _, err := queries.RunPartitionTargetUpsert(ctx, db.RunPartitionTargetUpsertParams{
+		RunID:                 runID,
+		PartitionDefinitionID: partitionDefinitionID,
+		SelectionMode:         selectionMode,
+		PartitionKey:          partitionKey,
+		RangeStartKey:         rangeStartKey,
+		RangeEndKey:           rangeEndKey,
+		PartitionSubsetJson:   string(subsetJSONBytes),
+		TagsJson:              "{}",
+		BackfillKey:           backfillKey,
+	}); err != nil {
+		t.Fatalf("upsert run partition target: %v", err)
+	}
+
+	return backfill
 }
 
 func mustFindRunStep(t *testing.T, rows []db.RunStep, stepKey string) db.RunStep {

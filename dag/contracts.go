@@ -26,12 +26,14 @@ func ErrContract(message string) error {
 }
 
 type nodeSpec struct {
-	key         string
-	displayName string
-	description string
-	inType      reflect.Type
-	outType     reflect.Type
-	runValue    reflect.Value
+	key                 string
+	displayName         string
+	description         string
+	inType              reflect.Type
+	outType             reflect.Type
+	runValue            reflect.Value
+	partitionDefinition PartitionDefinition
+	partitionAssets     []string
 }
 
 type Node[I any, O any] struct {
@@ -81,6 +83,26 @@ func (n Node[I, O]) WithDisplayName(displayName string) Node[I, O] {
 
 func (n Node[I, O]) WithDescription(description string) Node[I, O] {
 	n.spec.description = strings.TrimSpace(description)
+	return n
+}
+
+func (n Node[I, O]) WithPartition(definition PartitionDefinition, assets ...string) Node[I, O] {
+	if definition == nil {
+		panic("dag.Node.WithPartition: definition is required")
+	}
+	n.spec.partitionDefinition = definition
+	n.spec.partitionAssets = normalizeAssetKeys(assets)
+	return n
+}
+
+func (n Node[I, O]) WithCustomPartition(provider CustomPartition) Node[I, O] {
+	definition, err := NewCustomPartitionDefinition(provider)
+	if err != nil {
+		panic(fmt.Sprintf("dag.Node.WithCustomPartition: %v", err))
+	}
+	spec := provider.Spec()
+	n.spec.partitionDefinition = definition
+	n.spec.partitionAssets = normalizeAssetKeys(spec.Assets)
 	return n
 }
 
@@ -217,14 +239,16 @@ func inferSteps(jobKey string, nodes []nodeSpec) ([]StepDefinition, error) {
 		}
 
 		steps = append(steps, StepDefinition{
-			Key:         spec.key,
-			DisplayName: displayName,
-			Description: spec.description,
-			DependsOn:   []string{},
-			Bindings:    []InputBinding{},
-			inputType:   spec.inType,
-			outputType:  spec.outType,
-			runValue:    spec.runValue,
+			Key:                 spec.key,
+			DisplayName:         displayName,
+			Description:         spec.description,
+			DependsOn:           []string{},
+			Bindings:            []InputBinding{},
+			inputType:           spec.inType,
+			outputType:          spec.outType,
+			runValue:            spec.runValue,
+			partitionDefinition: spec.partitionDefinition,
+			partitionAssets:     cloneStrings(spec.partitionAssets),
 		})
 		providersByType[spec.outType] = append(providersByType[spec.outType], spec.key)
 	}

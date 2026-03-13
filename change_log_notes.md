@@ -41,6 +41,23 @@ Use this file to capture user-facing release notes as implementation lands.
   - selection modes (`all`, `single`, `range`, `subset`)
   - launch policy controls (`multi_run`, `single_run`, max partitions per run)
   - recent backfill list with status chips and inline partition status detail panel
+- Added op-level partition authoring APIs:
+  - `dag.Node.WithPartition(...)`
+  - `dag.Node.WithCustomPartition(...)` with `CustomPartition` (`Spec()+Keys()`)
+- Added typed partition helper constructors for common workflows:
+  - `StringPartitions`, `MinutelyEvery`, `HourlyFrom`, `DailyFrom`, `WeeklyFrom`, `MonthlyFrom`
+  - `MultiPartitions` + `Dimension`
+- Added registry partition sync behavior:
+  - op partition definitions (`target_kind='op'`) and keys are upserted during startup sync
+  - stale op partition definitions are removed when no longer present in code
+- Added store-level partition management methods required for runtime bootstrap:
+  - definition get-many/upsert/delete
+  - key upsert/delete-by-definition
+- Added typed partition runtime context helper for ops:
+  - `dag.RunPartitionMetaFromContext(ctx)` exposes selection mode, keys/ranges, and backfill key.
+- Added executor-driven backfill reconciliation:
+  - run terminal state (`success`/`failed`/`canceled`) now updates linked `backfill_partitions` rows
+  - `backfills` aggregate status/counts are recomputed automatically.
 
 ### Changed
 - Locked partitions D3 strategy: typed canonical partition/backfill target model with pluggable tag projection (DAGGO-first tags; Dagster-compatible projection can be added without core model changes).
@@ -54,6 +71,12 @@ Use this file to capture user-facing release notes as implementation lands.
   - max planned run count cap
   - max `max_partitions_per_run` cap
 - Added structured launch logs for normalized selections and launch outcomes.
+- Changed backfill partition resolution to prefer op-targeted definitions and only fall back to legacy job-targeted metadata for transition safety.
+- Changed job partition contract to a single shared partition domain across partitioned ops within a job (mixed domains are rejected during startup sync in current experimental scope).
+- Changed store abstraction to expose reconciliation primitives:
+  - `RunPartitionTargetGetByRunID`
+  - `BackfillPartitionGetManyByRunID`
+  - `BackfillUpdateStatus`
 
 ### Fixed
 - _None yet._
@@ -61,6 +84,7 @@ Use this file to capture user-facing release notes as implementation lands.
 ### Docs
 - Added partitions planning decision log updates (`partition_progress.md`) and tag-strategy evaluation note (`docs/PARTITIONS_TAG_STRATEGY_STRAWMAN.md`).
 - Updated partition progress tracker to mark Chunk 1 complete.
+- Updated README, usage guide, and `docs/PARTITIONS.md` to document op-attached partitions, typed helper APIs, custom partition providers, and automatic startup sync (removing manual SQL bootstrap as the canonical path).
 
 ### Testing
 - Added SQLite tests for partition/backfill migration/query lifecycle:
@@ -95,3 +119,12 @@ Use this file to capture user-facing release notes as implementation lands.
   - static mapping behavior and missing-key reporting
   - time-window mapping behavior with missing upstream windows surfaced
   - multi-dimensional mapping behavior (default identity and explicit dimension mapping)
+- Added tests for:
+  - `WithPartition` and `WithCustomPartition` node attachment behavior
+  - registry startup sync writing op partition definitions/keys
+  - registry rejection of mixed partition domains within one job
+  - minutely/monthly helper key generation behavior
+- Added executor tests for:
+  - typed partition metadata propagation into op context
+  - automatic backfill reconciliation on successful runs
+  - automatic backfill reconciliation on failed runs

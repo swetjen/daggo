@@ -181,6 +181,7 @@ type BackfillPartition = {
 type BackfillsGetManyResponse = {
   data?: BackfillSummary[];
   total?: number;
+  job_has_partitions?: boolean;
   error?: string;
 };
 
@@ -412,6 +413,7 @@ export function App() {
   const [jobBackfills, setJobBackfills] = useState<BackfillSummary[]>([]);
   const [jobBackfillsTotal, setJobBackfillsTotal] = useState(0);
   const [jobBackfillsBusy, setJobBackfillsBusy] = useState(false);
+  const [selectedJobSupportsBackfills, setSelectedJobSupportsBackfills] = useState(false);
   const [selectedBackfillKey, setSelectedBackfillKey] = useState("");
   const [selectedBackfillSummary, setSelectedBackfillSummary] = useState<BackfillSummary | null>(null);
   const [selectedBackfillPartitions, setSelectedBackfillPartitions] = useState<BackfillPartition[]>([]);
@@ -1400,6 +1402,7 @@ export function App() {
 
   useEffect(() => {
     if (activeSection !== "jobs" || jobsPage !== "detail" || !selectedJobKey) {
+      setSelectedJobSupportsBackfills(false);
       setJobBackfills([]);
       setJobBackfillsTotal(0);
       setSelectedBackfillKey("");
@@ -1576,6 +1579,7 @@ export function App() {
   async function refreshBackfillsForJob(jobKey: string): Promise<void> {
     const normalizedJobKey = jobKey.trim();
     if (!normalizedJobKey) {
+      setSelectedJobSupportsBackfills(false);
       setJobBackfills([]);
       setJobBackfillsTotal(0);
       setSelectedBackfillKey("");
@@ -1591,6 +1595,17 @@ export function App() {
       if (response.error) {
         throw new Error(response.error);
       }
+      const supportsBackfills = Boolean(response.job_has_partitions);
+      setSelectedJobSupportsBackfills(supportsBackfills);
+      if (!supportsBackfills) {
+        setJobBackfills([]);
+        setJobBackfillsTotal(0);
+        setSelectedBackfillKey("");
+        setSelectedBackfillSummary(null);
+        setSelectedBackfillPartitions([]);
+        setSelectedBackfillPartitionsTotal(0);
+        return;
+      }
       const rows = response.data ?? [];
       setJobBackfills(rows);
       setJobBackfillsTotal(response.total ?? rows.length);
@@ -1601,6 +1616,7 @@ export function App() {
         return rows[0]?.backfill_key ?? "";
       });
     } catch (err) {
+      setSelectedJobSupportsBackfills(false);
       setError(err instanceof Error ? err.message : "Failed to load backfills");
     } finally {
       setJobBackfillsBusy(false);
@@ -2467,173 +2483,177 @@ export function App() {
                               </ul>
                             </div>
 
-                            <div className="schedule-box inline-section job-control-card backfill-control-card">
-                              <div className="backfill-card-head">
-                                <h4>Launch Backfill</h4>
-                                {jobHasActiveBackfill ? <span className="pill running">active</span> : <span className="pill neutral">idle</span>}
-                              </div>
-                              <div className="backfill-mode-picker" role="group" aria-label="Backfill selection mode">
-                                {(["all", "single", "range", "subset"] as BackfillSelectionMode[]).map((mode) => (
-                                  <button
-                                    key={mode}
-                                    type="button"
-                                    className={`backfill-mode-option ${backfillSelectionMode === mode ? "active" : ""}`}
-                                    onClick={() => setBackfillSelectionMode(mode)}
-                                  >
-                                    {mode}
-                                  </button>
-                                ))}
-                              </div>
-
-                              {backfillSelectionMode === "single" ? (
-                                <label className="backfill-field">
-                                  <span>Partition key</span>
-                                  <input
-                                    value={backfillSinglePartitionKey}
-                                    onChange={(event) => setBackfillSinglePartitionKey(event.target.value)}
-                                    placeholder="e.g. 2026-01-01"
-                                  />
-                                </label>
-                              ) : null}
-
-                              {backfillSelectionMode === "range" ? (
-                                <div className="backfill-range-fields">
-                                  <label className="backfill-field">
-                                    <span>Start key</span>
-                                    <input
-                                      value={backfillRangeStartPartition}
-                                      onChange={(event) => setBackfillRangeStartPartition(event.target.value)}
-                                      placeholder="inclusive"
-                                    />
-                                  </label>
-                                  <label className="backfill-field">
-                                    <span>End key</span>
-                                    <input
-                                      value={backfillRangeEndPartition}
-                                      onChange={(event) => setBackfillRangeEndPartition(event.target.value)}
-                                      placeholder="inclusive"
-                                    />
-                                  </label>
-                                </div>
-                              ) : null}
-
-                              {backfillSelectionMode === "subset" ? (
-                                <label className="backfill-field">
-                                  <span>Partition keys (comma or newline separated)</span>
-                                  <textarea
-                                    value={backfillSubsetPartitionKeysText}
-                                    onChange={(event) => setBackfillSubsetPartitionKeysText(event.target.value)}
-                                    rows={3}
-                                    placeholder={`2026-01-01\n2026-01-03`}
-                                  />
-                                  <small>{backfillSubsetPartitionKeys.length} keys parsed</small>
-                                </label>
-                              ) : null}
-
-                              {backfillSelectionMode === "all" ? (
-                                <p className="job-empty-inline">Targets all keys from this job partition definition.</p>
-                              ) : null}
-
-                              <div className="backfill-policy-row">
-                                <label className="backfill-field">
-                                  <span>Policy</span>
-                                  <select
-                                    value={backfillPolicyMode}
-                                    onChange={(event) => setBackfillPolicyMode(event.target.value as BackfillPolicyMode)}
-                                  >
-                                    <option value="multi_run">multi_run</option>
-                                    <option value="single_run">single_run</option>
-                                  </select>
-                                </label>
-                                {backfillPolicyMode === "multi_run" ? (
-                                  <label className="backfill-field">
-                                    <span>Max partitions/run</span>
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      max={1000}
-                                      value={backfillMaxPartitionsPerRun}
-                                      onChange={(event) => setBackfillMaxPartitionsPerRun(event.target.value)}
-                                    />
-                                  </label>
-                                ) : (
-                                  <span className="job-empty-inline">Single run across selected partitions.</span>
-                                )}
-                              </div>
-
-                              <button
-                                className="primary-btn tiny backfill-launch-btn"
-                                disabled={backfillLaunchBusy || !canLaunchBackfill}
-                                onClick={() => void launchBackfillForSelectedJob()}
-                              >
-                                {backfillLaunchBusy ? "Launching..." : "Launch Backfill"}
-                              </button>
-                            </div>
-
-                            <div className="schedule-box inline-section job-control-card backfill-status-card">
-                              <div className="backfill-card-head">
-                                <h4>Recent Backfills</h4>
-                                <span className="muted">{jobBackfillsTotal} total</span>
-                                {jobBackfillsBusy ? <span className="muted">Updating…</span> : null}
-                              </div>
-                              <div className="backfill-list">
-                                {jobBackfills.map((backfill) => {
-                                  const status = normalizeBackfillStatus(backfill.status);
-                                  return (
-                                    <button
-                                      key={backfill.backfill_key}
-                                      type="button"
-                                      className={`backfill-list-item ${selectedBackfillKey === backfill.backfill_key ? "active" : ""}`}
-                                      onClick={() => setSelectedBackfillKey(backfill.backfill_key)}
-                                    >
-                                      <div className="backfill-list-item-head">
-                                        <code>{backfill.backfill_key}</code>
-                                        <span className={`backfill-status-badge ${status}`}>{backfillStatusLabel(status)}</span>
-                                      </div>
-                                      <small>
-                                        {backfill.selection_mode} | {backfill.policy_mode} |{" "}
-                                        {formatRelativeTimeFromNow(backfill.created_at, refreshClockMs)}
-                                      </small>
-                                    </button>
-                                  );
-                                })}
-                                {jobBackfills.length === 0 ? <p className="job-empty-inline">No backfills for this job yet.</p> : null}
-                              </div>
-
-                              {selectedBackfill ? (
-                                <div className="backfill-detail">
-                                  <div className="backfill-detail-head">
-                                    <code>{selectedBackfill.backfill_key}</code>
-                                    <span className={`backfill-status-badge ${normalizeBackfillStatus(selectedBackfill.status)}`}>
-                                      {backfillStatusLabel(selectedBackfill.status)}
-                                    </span>
+                            {selectedJobSupportsBackfills ? (
+                              <>
+                                <div className="schedule-box inline-section job-control-card backfill-control-card">
+                                  <div className="backfill-card-head">
+                                    <h4>Launch Backfill</h4>
+                                    {jobHasActiveBackfill ? <span className="pill running">active</span> : <span className="pill neutral">idle</span>}
                                   </div>
-                                  <div className="backfill-metrics">
-                                    <span>target {selectedBackfill.total_tracked_partitions}</span>
-                                    <span>queued {selectedBackfill.queued_count}</span>
-                                    <span>done {selectedBackfill.materialized_count}</span>
-                                    <span>failed {selectedBackfill.failed_downstream_count}</span>
-                                  </div>
-                                  {selectedBackfillBusy ? <p className="job-empty-inline">Loading partition status…</p> : null}
-                                  <div className="backfill-partition-list">
-                                    {selectedBackfillPartitions.slice(0, 16).map((partition) => (
-                                      <div key={partition.partition_key} className="backfill-partition-row">
-                                        <code>{partition.partition_key}</code>
-                                        <span className={`backfill-partition-status ${partition.status}`}>{partition.status}</span>
-                                      </div>
+                                  <div className="backfill-mode-picker" role="group" aria-label="Backfill selection mode">
+                                    {(["all", "single", "range", "subset"] as BackfillSelectionMode[]).map((mode) => (
+                                      <button
+                                        key={mode}
+                                        type="button"
+                                        className={`backfill-mode-option ${backfillSelectionMode === mode ? "active" : ""}`}
+                                        onClick={() => setBackfillSelectionMode(mode)}
+                                      >
+                                        {mode}
+                                      </button>
                                     ))}
-                                    {selectedBackfillPartitions.length === 0 && !selectedBackfillBusy ? (
-                                      <p className="job-empty-inline">No partition rows available.</p>
-                                    ) : null}
                                   </div>
-                                  {selectedBackfillPartitionsTotal > selectedBackfillPartitions.length ? (
-                                    <small className="muted">
-                                      Showing {selectedBackfillPartitions.length} of {selectedBackfillPartitionsTotal} partitions.
-                                    </small>
+
+                                  {backfillSelectionMode === "single" ? (
+                                    <label className="backfill-field">
+                                      <span>Partition key</span>
+                                      <input
+                                        value={backfillSinglePartitionKey}
+                                        onChange={(event) => setBackfillSinglePartitionKey(event.target.value)}
+                                        placeholder="e.g. 2026-01-01"
+                                      />
+                                    </label>
+                                  ) : null}
+
+                                  {backfillSelectionMode === "range" ? (
+                                    <div className="backfill-range-fields">
+                                      <label className="backfill-field">
+                                        <span>Start key</span>
+                                        <input
+                                          value={backfillRangeStartPartition}
+                                          onChange={(event) => setBackfillRangeStartPartition(event.target.value)}
+                                          placeholder="inclusive"
+                                        />
+                                      </label>
+                                      <label className="backfill-field">
+                                        <span>End key</span>
+                                        <input
+                                          value={backfillRangeEndPartition}
+                                          onChange={(event) => setBackfillRangeEndPartition(event.target.value)}
+                                          placeholder="inclusive"
+                                        />
+                                      </label>
+                                    </div>
+                                  ) : null}
+
+                                  {backfillSelectionMode === "subset" ? (
+                                    <label className="backfill-field">
+                                      <span>Partition keys (comma or newline separated)</span>
+                                      <textarea
+                                        value={backfillSubsetPartitionKeysText}
+                                        onChange={(event) => setBackfillSubsetPartitionKeysText(event.target.value)}
+                                        rows={3}
+                                        placeholder={`2026-01-01\n2026-01-03`}
+                                      />
+                                      <small>{backfillSubsetPartitionKeys.length} keys parsed</small>
+                                    </label>
+                                  ) : null}
+
+                                  {backfillSelectionMode === "all" ? (
+                                    <p className="job-empty-inline">Targets all keys from this op partition definition.</p>
+                                  ) : null}
+
+                                  <div className="backfill-policy-row">
+                                    <label className="backfill-field">
+                                      <span>Policy</span>
+                                      <select
+                                        value={backfillPolicyMode}
+                                        onChange={(event) => setBackfillPolicyMode(event.target.value as BackfillPolicyMode)}
+                                      >
+                                        <option value="multi_run">multi_run</option>
+                                        <option value="single_run">single_run</option>
+                                      </select>
+                                    </label>
+                                    {backfillPolicyMode === "multi_run" ? (
+                                      <label className="backfill-field">
+                                        <span>Max partitions/run</span>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          max={1000}
+                                          value={backfillMaxPartitionsPerRun}
+                                          onChange={(event) => setBackfillMaxPartitionsPerRun(event.target.value)}
+                                        />
+                                      </label>
+                                    ) : (
+                                      <span className="job-empty-inline">Single run across selected partitions.</span>
+                                    )}
+                                  </div>
+
+                                  <button
+                                    className="primary-btn tiny backfill-launch-btn"
+                                    disabled={backfillLaunchBusy || !canLaunchBackfill}
+                                    onClick={() => void launchBackfillForSelectedJob()}
+                                  >
+                                    {backfillLaunchBusy ? "Launching..." : "Launch Backfill"}
+                                  </button>
+                                </div>
+
+                                <div className="schedule-box inline-section job-control-card backfill-status-card">
+                                  <div className="backfill-card-head">
+                                    <h4>Recent Backfills</h4>
+                                    <span className="muted">{jobBackfillsTotal} total</span>
+                                    {jobBackfillsBusy ? <span className="muted">Updating…</span> : null}
+                                  </div>
+                                  <div className="backfill-list">
+                                    {jobBackfills.map((backfill) => {
+                                      const status = normalizeBackfillStatus(backfill.status);
+                                      return (
+                                        <button
+                                          key={backfill.backfill_key}
+                                          type="button"
+                                          className={`backfill-list-item ${selectedBackfillKey === backfill.backfill_key ? "active" : ""}`}
+                                          onClick={() => setSelectedBackfillKey(backfill.backfill_key)}
+                                        >
+                                          <div className="backfill-list-item-head">
+                                            <code>{backfill.backfill_key}</code>
+                                            <span className={`backfill-status-badge ${status}`}>{backfillStatusLabel(status)}</span>
+                                          </div>
+                                          <small>
+                                            {backfill.selection_mode} | {backfill.policy_mode} |{" "}
+                                            {formatRelativeTimeFromNow(backfill.created_at, refreshClockMs)}
+                                          </small>
+                                        </button>
+                                      );
+                                    })}
+                                    {jobBackfills.length === 0 ? <p className="job-empty-inline">No backfills for this job yet.</p> : null}
+                                  </div>
+
+                                  {selectedBackfill ? (
+                                    <div className="backfill-detail">
+                                      <div className="backfill-detail-head">
+                                        <code>{selectedBackfill.backfill_key}</code>
+                                        <span className={`backfill-status-badge ${normalizeBackfillStatus(selectedBackfill.status)}`}>
+                                          {backfillStatusLabel(selectedBackfill.status)}
+                                        </span>
+                                      </div>
+                                      <div className="backfill-metrics">
+                                        <span>target {selectedBackfill.total_tracked_partitions}</span>
+                                        <span>queued {selectedBackfill.queued_count}</span>
+                                        <span>done {selectedBackfill.materialized_count}</span>
+                                        <span>failed {selectedBackfill.failed_downstream_count}</span>
+                                      </div>
+                                      {selectedBackfillBusy ? <p className="job-empty-inline">Loading partition status…</p> : null}
+                                      <div className="backfill-partition-list">
+                                        {selectedBackfillPartitions.slice(0, 16).map((partition) => (
+                                          <div key={partition.partition_key} className="backfill-partition-row">
+                                            <code>{partition.partition_key}</code>
+                                            <span className={`backfill-partition-status ${partition.status}`}>{partition.status}</span>
+                                          </div>
+                                        ))}
+                                        {selectedBackfillPartitions.length === 0 && !selectedBackfillBusy ? (
+                                          <p className="job-empty-inline">No partition rows available.</p>
+                                        ) : null}
+                                      </div>
+                                      {selectedBackfillPartitionsTotal > selectedBackfillPartitions.length ? (
+                                        <small className="muted">
+                                          Showing {selectedBackfillPartitions.length} of {selectedBackfillPartitionsTotal} partitions.
+                                        </small>
+                                      ) : null}
+                                    </div>
                                   ) : null}
                                 </div>
-                              ) : null}
-                            </div>
+                              </>
+                            ) : null}
                           </div>
 
                           <div className="job-ops-layout">

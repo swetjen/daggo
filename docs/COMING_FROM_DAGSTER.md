@@ -56,12 +56,14 @@ DAGGO uses an operator-focused shell:
 
 - No Dagster compatibility target (DB, GraphQL, or UI parity).
 - Asset lineage view is not a v1 focus.
-- Backfills/partitions are now in incremental backend rollout:
-  - partition/backfill storage model is in place
-  - partition selection + launch planning exists
-  - backfill launch/status RPC flows exist
-  - initial job-detail UI wiring exists (selection + launch + status panels)
-  - full Dagster-equivalent asset workflows are still in progress
+- Partitions/backfills are experimental and currently op-centric in DAGGO:
+  - partitions attach to ops (`WithPartition(...)` / `WithCustomPartition(...)`)
+  - partition metadata and keys are synced automatically at startup
+  - backfill launch/status RPC flows and job-detail UI controls are available
+  - executor reconciles backfill partition/summary state automatically when runs complete/fail/cancel
+  - op code can read typed partition metadata with `dag.RunPartitionMetaFromContext(ctx)`
+  - one shared partition domain per job is currently required for backfills
+  - full Dagster-equivalent asset orchestration workflows are still in progress
 - Multi-tenant orchestration is not a current goal.
 
 ## Migration Approach

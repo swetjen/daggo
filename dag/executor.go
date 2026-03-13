@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,6 +49,12 @@ type runProcess struct {
 const (
 	ExecutionModeInProcess  = "in_process"
 	ExecutionModeSubprocess = "subprocess"
+
+	backfillStatusRunning         = "running"
+	backfillStatusCompleted       = "completed"
+	backfillStatusFailed          = "failed"
+	backfillPartitionStatusDone   = "materialized"
+	backfillPartitionStatusFailed = "failed_downstream"
 )
 
 func NewExecutor(queries db.Store, pool *sql.DB, registry *Registry, queueSize int) *Executor {
@@ -410,6 +417,9 @@ func (e *Executor) markRunCanceled(ctx context.Context, runID int64, reason stri
 	_ = e.addEvent(ctx, runID, "", "run_canceled", "warn", "run canceled", map[string]any{
 		"reason": message,
 	})
+	if reconcileErr := e.reconcileBackfillForRun(ctx, runID, "canceled", message); reconcileErr != nil {
+		slog.Error("daggo: failed to reconcile backfill state after run cancellation", "run_id", runID, "err", reconcileErr)
+	}
 	return nil
 }
 
@@ -549,6 +559,10 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 	if strings.TrimSpace(run.ParamsJson) != "" {
 		_ = json.Unmarshal([]byte(run.ParamsJson), &params)
 	}
+	partitionMeta, partitionMetaErr := e.loadRunPartitionMeta(ctx, run.ID)
+	if partitionMetaErr != nil {
+		slog.Warn("daggo: failed to load run partition target", "run_id", run.ID, "err", partitionMetaErr)
+	}
 
 	outputs := map[string]json.RawMessage{}
 	if run.ParentRunID > 0 {
@@ -573,7 +587,7 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 
 	maxConcurrentSteps := e.RunMaxConcurrentSteps()
 	captureGlobalLogs := e.RunMaxConcurrentRuns() <= 1 && maxConcurrentSteps <= 1
-	hadFailure, failureMessage := e.executeRunSteps(ctx, run, job, order, stepRows, outputs, params, maxConcurrentSteps, captureGlobalLogs)
+	hadFailure, failureMessage := e.executeRunSteps(ctx, run, job, order, stepRows, outputs, params, partitionMeta, maxConcurrentSteps, captureGlobalLogs)
 
 	status := "success"
 	if hadFailure {
@@ -594,6 +608,9 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 		return err
 	}
 	_ = e.addEvent(ctx, run.ID, "", "run_completed", "info", "run completed", map[string]any{"status": status})
+	if err := e.reconcileBackfillForRun(ctx, run.ID, status, failureMessage); err != nil {
+		slog.Error("daggo: failed to reconcile backfill state after run completion", "run_id", run.ID, "err", err)
+	}
 	return nil
 }
 
@@ -612,6 +629,7 @@ func (e *Executor) executeRunSteps(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	partitionMeta *RunPartitionMeta,
 	maxConcurrentSteps int,
 	captureGlobalLogs bool,
 ) (bool, string) {
@@ -622,9 +640,9 @@ func (e *Executor) executeRunSteps(
 	}
 
 	if run.RerunStepKey != "" || maxConcurrentSteps <= 1 || len(order) <= 1 {
-		return e.executeRunStepsSerial(ctx, run, job, order, stepRows, outputs, params, captureGlobalLogs)
+		return e.executeRunStepsSerial(ctx, run, job, order, stepRows, outputs, params, partitionMeta, captureGlobalLogs)
 	}
-	return e.executeRunStepsConcurrent(ctx, run, job, order, stepRows, outputs, params, maxConcurrentSteps)
+	return e.executeRunStepsConcurrent(ctx, run, job, order, stepRows, outputs, params, partitionMeta, maxConcurrentSteps)
 }
 
 func (e *Executor) executeRunStepsSerial(
@@ -635,6 +653,7 @@ func (e *Executor) executeRunStepsSerial(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	partitionMeta *RunPartitionMeta,
 	captureGlobalLogs bool,
 ) (bool, string) {
 	hadFailure := false
@@ -683,7 +702,7 @@ func (e *Executor) executeRunStepsSerial(
 			continue
 		}
 
-		result := e.executeSingleStep(ctx, run.ID, job.Key, stepDef, stepRow.Attempt, params, outputs, captureGlobalLogs)
+		result := e.executeSingleStep(ctx, run.ID, job.Key, stepDef, stepRow.Attempt, params, partitionMeta, outputs, captureGlobalLogs)
 		stepRow.Status = result.status
 		stepRow.ErrorMessage = result.errorMessage
 		if result.status == "success" {
@@ -711,6 +730,7 @@ func (e *Executor) executeRunStepsConcurrent(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	partitionMeta *RunPartitionMeta,
 	maxConcurrentSteps int,
 ) (bool, string) {
 	stepByKey := make(map[string]StepDefinition, len(order))
@@ -769,7 +789,7 @@ func (e *Executor) executeRunStepsConcurrent(
 			for stepKey := range workQueue {
 				stepDef := stepByKey[stepKey]
 				snapshot := cloneOutputs(outputs, &outputsMu)
-				results <- e.executeSingleStep(ctx, run.ID, job.Key, stepDef, attemptByKey[stepKey], params, snapshot, false)
+				results <- e.executeSingleStep(ctx, run.ID, job.Key, stepDef, attemptByKey[stepKey], params, partitionMeta, snapshot, false)
 			}
 		}()
 	}
@@ -887,6 +907,7 @@ func (e *Executor) executeSingleStep(
 	stepDef StepDefinition,
 	stepAttempt int64,
 	params map[string]any,
+	partitionMeta *RunPartitionMeta,
 	outputs map[string]json.RawMessage,
 	captureGlobalLogs bool,
 ) stepExecutionResult {
@@ -941,12 +962,17 @@ func (e *Executor) executeSingleStep(
 	}
 
 	stepLogger := e.newStepLogger(runID, jobKey, stepDef.Key, stepAttempt, os.Stderr)
+	var partitionMetaCopy *RunPartitionMeta
+	if partitionMeta != nil {
+		partitionMetaCopy = cloneRunPartitionMeta(*partitionMeta)
+	}
 	stepCtx := WithRunMeta(ctx, RunMeta{
-		RunID:   runID,
-		JobKey:  jobKey,
-		StepKey: stepDef.Key,
-		Attempt: stepAttempt,
-		Params:  copyParams(params),
+		RunID:     runID,
+		JobKey:    jobKey,
+		StepKey:   stepDef.Key,
+		Attempt:   stepAttempt,
+		Params:    copyParams(params),
+		Partition: partitionMetaCopy,
 	})
 	stepCtx = WithLogger(stepCtx, stepLogger)
 
@@ -1133,6 +1159,294 @@ func copyParams(params map[string]any) map[string]any {
 	return out
 }
 
+func cloneRunPartitionMeta(meta RunPartitionMeta) *RunPartitionMeta {
+	return &RunPartitionMeta{
+		DefinitionID:  meta.DefinitionID,
+		SelectionMode: meta.SelectionMode,
+		Keys:          cloneStrings(meta.Keys),
+		Ranges:        append([]PartitionSelectionRange(nil), meta.Ranges...),
+		BackfillKey:   meta.BackfillKey,
+	}
+}
+
+func normalizePartitionSelectionMode(raw string) PartitionSelectionMode {
+	switch PartitionSelectionMode(strings.TrimSpace(raw)) {
+	case PartitionSelectionModeSingle:
+		return PartitionSelectionModeSingle
+	case PartitionSelectionModeRange:
+		return PartitionSelectionModeRange
+	case PartitionSelectionModeSubset:
+		return PartitionSelectionModeSubset
+	default:
+		return PartitionSelectionModeSubset
+	}
+}
+
+func (e *Executor) loadRunPartitionMeta(ctx context.Context, runID int64) (*RunPartitionMeta, error) {
+	if e == nil || runID <= 0 {
+		return nil, nil
+	}
+	target, err := e.queries.RunPartitionTargetGetByRunID(ctx, runID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return runPartitionMetaFromTarget(target)
+}
+
+func runPartitionMetaFromTarget(target db.RunPartitionTarget) (*RunPartitionMeta, error) {
+	mode := normalizePartitionSelectionMode(target.SelectionMode)
+	keys, err := partitionKeysFromRunTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	start := strings.TrimSpace(target.RangeStartKey)
+	end := strings.TrimSpace(target.RangeEndKey)
+	ranges := []PartitionSelectionRange{}
+	switch mode {
+	case PartitionSelectionModeSingle:
+		ranges = []PartitionSelectionRange{{StartKey: keys[0], EndKey: keys[0]}}
+	case PartitionSelectionModeRange:
+		if start != "" && end != "" {
+			ranges = []PartitionSelectionRange{{StartKey: start, EndKey: end}}
+		}
+		if len(ranges) == 0 {
+			ranges = []PartitionSelectionRange{{StartKey: keys[0], EndKey: keys[len(keys)-1]}}
+		}
+	case PartitionSelectionModeSubset:
+		if len(keys) == 1 {
+			ranges = []PartitionSelectionRange{{StartKey: keys[0], EndKey: keys[0]}}
+		}
+	}
+
+	return &RunPartitionMeta{
+		DefinitionID:  target.PartitionDefinitionID,
+		SelectionMode: mode,
+		Keys:          keys,
+		Ranges:        ranges,
+		BackfillKey:   strings.TrimSpace(target.BackfillKey),
+	}, nil
+}
+
+func partitionKeysFromRunTarget(target db.RunPartitionTarget) ([]string, error) {
+	subsetJSON := strings.TrimSpace(target.PartitionSubsetJson)
+	if subsetJSON != "" {
+		var keys []string
+		if err := json.Unmarshal([]byte(subsetJSON), &keys); err != nil {
+			return nil, fmt.Errorf("parse run partition subset for run %d: %w", target.RunID, err)
+		}
+		normalized, err := normalizeOrderedKeys(keys, "partition key")
+		if err != nil {
+			return nil, err
+		}
+		return normalized, nil
+	}
+
+	partitionKey := strings.TrimSpace(target.PartitionKey)
+	if partitionKey != "" {
+		return []string{partitionKey}, nil
+	}
+
+	rangeStart := strings.TrimSpace(target.RangeStartKey)
+	rangeEnd := strings.TrimSpace(target.RangeEndKey)
+	if rangeStart != "" && rangeEnd != "" {
+		if rangeStart == rangeEnd {
+			return []string{rangeStart}, nil
+		}
+		return []string{rangeStart, rangeEnd}, nil
+	}
+	return []string{}, nil
+}
+
+func backfillPartitionOutcomeForRun(runStatus, runErrorMessage string) (string, string) {
+	status := normalizeExecutionStatus(runStatus)
+	if status == "success" {
+		return backfillPartitionStatusDone, ""
+	}
+	message := strings.TrimSpace(runErrorMessage)
+	if message == "" {
+		switch status {
+		case "canceled":
+			message = "run canceled"
+		default:
+			message = "run failed"
+		}
+	}
+	return backfillPartitionStatusFailed, message
+}
+
+func fallbackBackfillError(runErrorMessage string) string {
+	message := strings.TrimSpace(runErrorMessage)
+	if message != "" {
+		return message
+	}
+	return "one or more backfill runs failed"
+}
+
+func (e *Executor) reconcileBackfillForRun(ctx context.Context, runID int64, runStatus, runErrorMessage string) error {
+	if e == nil || runID <= 0 || e.queries == nil || e.pool == nil {
+		return nil
+	}
+
+	tx, err := e.pool.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	qtx := db.WithTx(e.queries, tx)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	target, err := qtx.RunPartitionTargetGetByRunID(ctx, runID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	backfillKey := strings.TrimSpace(target.BackfillKey)
+	if backfillKey == "" {
+		return nil
+	}
+
+	backfillRow, err := qtx.BackfillGetByKey(ctx, backfillKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	partitionStatus, partitionError := backfillPartitionOutcomeForRun(runStatus, runErrorMessage)
+	partitionsByRun, err := qtx.BackfillPartitionGetManyByRunID(ctx, runID)
+	if err != nil {
+		return err
+	}
+
+	updatedKeys := make(map[string]struct{})
+	for _, partition := range partitionsByRun {
+		if partition.BackfillID != backfillRow.ID {
+			continue
+		}
+		partitionKey := strings.TrimSpace(partition.PartitionKey)
+		if partitionKey == "" {
+			continue
+		}
+		if _, exists := updatedKeys[partitionKey]; exists {
+			continue
+		}
+		if _, err := qtx.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKey(ctx, db.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKeyParams{
+			Status:       partitionStatus,
+			RunID:        runID,
+			ErrorMessage: partitionError,
+			BackfillID:   backfillRow.ID,
+			PartitionKey: partitionKey,
+		}); err != nil {
+			return err
+		}
+		updatedKeys[partitionKey] = struct{}{}
+	}
+
+	if len(updatedKeys) == 0 {
+		keys, keyErr := partitionKeysFromRunTarget(target)
+		if keyErr != nil {
+			return keyErr
+		}
+		for _, partitionKey := range keys {
+			if _, exists := updatedKeys[partitionKey]; exists {
+				continue
+			}
+			if _, err := qtx.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKey(ctx, db.BackfillPartitionUpdateStatusByBackfillIDAndPartitionKeyParams{
+				Status:       partitionStatus,
+				RunID:        runID,
+				ErrorMessage: partitionError,
+				BackfillID:   backfillRow.ID,
+				PartitionKey: partitionKey,
+			}); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return err
+			}
+			updatedKeys[partitionKey] = struct{}{}
+		}
+	}
+
+	materializedCount, err := qtx.BackfillPartitionCountByBackfillIDAndStatus(ctx, db.BackfillPartitionCountByBackfillIDAndStatusParams{
+		BackfillID: backfillRow.ID,
+		Status:     backfillPartitionStatusDone,
+	})
+	if err != nil {
+		return err
+	}
+	failedCount, err := qtx.BackfillPartitionCountByBackfillIDAndStatus(ctx, db.BackfillPartitionCountByBackfillIDAndStatusParams{
+		BackfillID: backfillRow.ID,
+		Status:     backfillPartitionStatusFailed,
+	})
+	if err != nil {
+		return err
+	}
+	totalTracked, err := qtx.BackfillPartitionCountByBackfillID(ctx, backfillRow.ID)
+	if err != nil {
+		return err
+	}
+
+	accounted := materializedCount + failedCount
+	backfillStatus := backfillStatusRunning
+	completedAt := ""
+	errorMessage := ""
+	if accounted >= totalTracked && totalTracked > 0 {
+		completedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		if failedCount > 0 {
+			backfillStatus = backfillStatusFailed
+			errorMessage = fallbackBackfillError(runErrorMessage)
+		} else {
+			backfillStatus = backfillStatusCompleted
+		}
+	} else if failedCount > 0 {
+		backfillStatus = backfillStatusRunning
+		if strings.TrimSpace(backfillRow.ErrorMessage) != "" {
+			errorMessage = backfillRow.ErrorMessage
+		} else {
+			errorMessage = fallbackBackfillError(runErrorMessage)
+		}
+	}
+
+	startedAt := backfillRow.StartedAt
+	if strings.TrimSpace(startedAt) == "" {
+		startedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if _, err := qtx.BackfillUpdateStatus(ctx, db.BackfillUpdateStatusParams{
+		Status:                  backfillStatus,
+		RequestedPartitionCount: backfillRow.RequestedPartitionCount,
+		RequestedRunCount:       backfillRow.RequestedRunCount,
+		CompletedPartitionCount: materializedCount,
+		FailedPartitionCount:    failedCount,
+		ErrorMessage:            errorMessage,
+		StartedAt:               startedAt,
+		CompletedAt:             completedAt,
+		ID:                      backfillRow.ID,
+	}); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func (e *Executor) failRun(ctx context.Context, runID int64, message string) error {
 	run, err := e.queries.RunGetByID(ctx, runID)
 	if err == nil && isTerminalExecutionStatus(run.Status) {
@@ -1145,6 +1459,9 @@ func (e *Executor) failRun(ctx context.Context, runID int64, message string) err
 		ID:           runID,
 	})
 	_ = e.addEvent(ctx, runID, "", "run_failed", "error", message, map[string]any{})
+	if reconcileErr := e.reconcileBackfillForRun(ctx, runID, "failed", message); reconcileErr != nil {
+		slog.Error("daggo: failed to reconcile backfill state after run failure", "run_id", runID, "err", reconcileErr)
+	}
 	return err
 }
 

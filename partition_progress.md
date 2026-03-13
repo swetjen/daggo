@@ -2,7 +2,7 @@
 
 Branch: `feat/partitions`
 Source plan: `partition_plan.md`
-Last updated: 2026-03-08
+Last updated: 2026-03-09
 
 ## Current Status
 - Phase: `Chunk 6 Complete`
@@ -33,6 +33,8 @@ Last updated: 2026-03-08
 - 2026-03-08: Chunk 5 delivered: partition mapping resolution APIs (identity/time-window/static/multi) with explicit `required_but_nonexistent` partition subsets and mapping test coverage.
 - 2026-03-08: Chunk 6 delivered end-to-end: guardrails + structured logs in launch path, admin UI wiring for launch + status in Job detail, and operational workflow tests covering launch/list/detail/completion accounting.
 - 2026-03-08: Chunk 7 docs updates delivered: README, usage guide, and Dagster migration notes updated to reflect current partition/backfill rollout state.
+- 2026-03-09: API refinement landed: partitions are now attached to ops (`WithPartition` / `WithCustomPartition`), startup sync auto-manages op partition definitions/keys, and backfill resolution prefers op-targeted partition metadata.
+- 2026-03-09: Runtime maturity updates landed: executor now auto-reconciles backfill partition/summary state on run terminal transitions, and op code can read typed partition metadata via `RunPartitionMetaFromContext(ctx)`.
 
 ## Implementation Chunks
 

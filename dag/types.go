@@ -6,11 +6,20 @@ import (
 )
 
 type RunMeta struct {
-	RunID   int64
-	JobKey  string
-	StepKey string
-	Attempt int64
-	Params  map[string]any
+	RunID     int64
+	JobKey    string
+	StepKey   string
+	Attempt   int64
+	Params    map[string]any
+	Partition *RunPartitionMeta
+}
+
+type RunPartitionMeta struct {
+	DefinitionID  int64
+	SelectionMode PartitionSelectionMode
+	Keys          []string
+	Ranges        []PartitionSelectionRange
+	BackfillKey   string
 }
 
 type runMetaKey struct{}
@@ -25,6 +34,14 @@ func RunMetaFromContext(ctx context.Context) (RunMeta, bool) {
 	}
 	meta, ok := ctx.Value(runMetaKey{}).(RunMeta)
 	return meta, ok
+}
+
+func RunPartitionMetaFromContext(ctx context.Context) (RunPartitionMeta, bool) {
+	meta, ok := RunMetaFromContext(ctx)
+	if !ok || meta.Partition == nil {
+		return RunPartitionMeta{}, false
+	}
+	return *meta.Partition, true
 }
 
 type InputResolutionMode string
@@ -50,9 +67,11 @@ type StepDefinition struct {
 	DependsOn   []string
 	Bindings    []InputBinding
 
-	inputType  reflect.Type
-	outputType reflect.Type
-	runValue   reflect.Value
+	inputType           reflect.Type
+	outputType          reflect.Type
+	runValue            reflect.Value
+	partitionDefinition PartitionDefinition
+	partitionAssets     []string
 }
 
 func (s StepDefinition) newInputValue() reflect.Value {

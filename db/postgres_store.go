@@ -388,12 +388,38 @@ func (s *PostgresStore) BackfillCreate(ctx context.Context, arg BackfillCreatePa
 	return fromPostgresBackfill(row), nil
 }
 
+func (s *PostgresStore) BackfillUpdateStatus(ctx context.Context, arg BackfillUpdateStatusParams) (Backfill, error) {
+	row, err := s.queries.BackfillUpdateStatus(ctx, postgresgen.BackfillUpdateStatusParams{
+		Status:                  arg.Status,
+		RequestedPartitionCount: arg.RequestedPartitionCount,
+		RequestedRunCount:       arg.RequestedRunCount,
+		CompletedPartitionCount: arg.CompletedPartitionCount,
+		FailedPartitionCount:    arg.FailedPartitionCount,
+		ErrorMessage:            arg.ErrorMessage,
+		StartedAt:               toNullTime(arg.StartedAt),
+		CompletedAt:             toNullTime(arg.CompletedAt),
+		ID:                      arg.ID,
+	})
+	if err != nil {
+		return Backfill{}, err
+	}
+	return fromPostgresBackfill(row), nil
+}
+
 func (s *PostgresStore) BackfillPartitionGetManyByBackfillID(ctx context.Context, arg BackfillPartitionGetManyByBackfillIDParams) ([]BackfillPartition, error) {
 	rows, err := s.queries.BackfillPartitionGetManyByBackfillID(ctx, postgresgen.BackfillPartitionGetManyByBackfillIDParams{
 		BackfillID: arg.BackfillID,
 		Limit:      int32(arg.Limit),
 		Offset:     int32(arg.Offset),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresBackfillPartition), nil
+}
+
+func (s *PostgresStore) BackfillPartitionGetManyByRunID(ctx context.Context, runID int64) ([]BackfillPartition, error) {
+	rows, err := s.queries.BackfillPartitionGetManyByRunID(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -451,6 +477,14 @@ func (s *PostgresStore) RunPartitionTargetGetManyByBackfillKey(ctx context.Conte
 	return mapSlice(rows, fromPostgresRunPartitionTarget), nil
 }
 
+func (s *PostgresStore) RunPartitionTargetGetByRunID(ctx context.Context, runID int64) (RunPartitionTarget, error) {
+	row, err := s.queries.RunPartitionTargetGetByRunID(ctx, runID)
+	if err != nil {
+		return RunPartitionTarget{}, err
+	}
+	return fromPostgresRunPartitionTarget(row), nil
+}
+
 func (s *PostgresStore) RunPartitionTargetUpsert(ctx context.Context, arg RunPartitionTargetUpsertParams) (RunPartitionTarget, error) {
 	row, err := s.queries.RunPartitionTargetUpsert(ctx, postgresgen.RunPartitionTargetUpsertParams{
 		RunID:                 arg.RunID,
@@ -493,6 +527,33 @@ func (s *PostgresStore) PartitionDefinitionGetByJobIDAndTarget(ctx context.Conte
 	return fromPostgresPartitionDefinition(row), nil
 }
 
+func (s *PostgresStore) PartitionDefinitionGetManyByJobID(ctx context.Context, jobID int64) ([]PartitionDefinition, error) {
+	rows, err := s.queries.PartitionDefinitionGetManyByJobID(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresPartitionDefinition), nil
+}
+
+func (s *PostgresStore) PartitionDefinitionUpsert(ctx context.Context, arg PartitionDefinitionUpsertParams) (PartitionDefinition, error) {
+	row, err := s.queries.PartitionDefinitionUpsert(ctx, postgresgen.PartitionDefinitionUpsertParams{
+		JobID:          arg.JobID,
+		TargetKind:     arg.TargetKind,
+		TargetKey:      arg.TargetKey,
+		DefinitionKind: arg.DefinitionKind,
+		DefinitionJson: []byte(arg.DefinitionJson),
+		Enabled:        arg.Enabled != 0,
+	})
+	if err != nil {
+		return PartitionDefinition{}, err
+	}
+	return fromPostgresPartitionDefinition(row), nil
+}
+
+func (s *PostgresStore) PartitionDefinitionDeleteByID(ctx context.Context, id int64) error {
+	return s.queries.PartitionDefinitionDeleteByID(ctx, id)
+}
+
 func (s *PostgresStore) PartitionKeyGetManyByDefinitionID(ctx context.Context, arg PartitionKeyGetManyByDefinitionIDParams) ([]PartitionKey, error) {
 	rows, err := s.queries.PartitionKeyGetManyByDefinitionID(ctx, postgresgen.PartitionKeyGetManyByDefinitionIDParams{
 		PartitionDefinitionID: arg.PartitionDefinitionID,
@@ -507,6 +568,23 @@ func (s *PostgresStore) PartitionKeyGetManyByDefinitionID(ctx context.Context, a
 
 func (s *PostgresStore) PartitionKeyCountByDefinitionID(ctx context.Context, partitionDefinitionID int64) (int64, error) {
 	return s.queries.PartitionKeyCountByDefinitionID(ctx, partitionDefinitionID)
+}
+
+func (s *PostgresStore) PartitionKeyUpsert(ctx context.Context, arg PartitionKeyUpsertParams) (PartitionKey, error) {
+	row, err := s.queries.PartitionKeyUpsert(ctx, postgresgen.PartitionKeyUpsertParams{
+		PartitionDefinitionID: arg.PartitionDefinitionID,
+		PartitionKey:          arg.PartitionKey,
+		SortIndex:             arg.SortIndex,
+		IsActive:              arg.IsActive != 0,
+	})
+	if err != nil {
+		return PartitionKey{}, err
+	}
+	return fromPostgresPartitionKey(row), nil
+}
+
+func (s *PostgresStore) PartitionKeyDeleteByDefinitionID(ctx context.Context, partitionDefinitionID int64) error {
+	return s.queries.PartitionKeyDeleteByDefinitionID(ctx, partitionDefinitionID)
 }
 
 func (s *PostgresStore) SchedulerHeartbeatUpsert(ctx context.Context, arg SchedulerHeartbeatUpsertParams) (SchedulerHeartbeat, error) {

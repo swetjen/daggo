@@ -147,6 +147,76 @@ func (o *MyOps) AnalyzeTextOp(ctx context.Context, in AnalyzeTextInput) (Analyze
 
 See [examples/content_ingestion/main.go](examples/content_ingestion/main.go), [examples/content_ingestion/jobs/content_ingestion.go](examples/content_ingestion/jobs/content_ingestion.go), [examples/content_ingestion/ops/content_ops.go](examples/content_ingestion/ops/content_ops.go), and [examples/content_ingestion/resources/deps.go](examples/content_ingestion/resources/deps.go) for the full example.
 
+## Partitions (Experimental)
+
+Partitions are attached to ops, not jobs.
+
+```go
+extract := dag.Op[ops.ExtractInput, ops.ExtractOutput]("extract", myOps.Extract).
+	WithPartition(
+		dag.DailyFrom(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), dag.WithTimezone("UTC")),
+		"raw_articles",
+	)
+```
+
+Built-in helpers cover common cases:
+
+- `dag.StringPartitions(...)`
+- `dag.MinutelyEvery(...)`
+- `dag.HourlyFrom(...)`
+- `dag.DailyFrom(...)`
+- `dag.WeeklyFrom(...)`
+- `dag.MonthlyFrom(...)`
+- `dag.MultiPartitions(dag.Dimension(...), dag.Dimension(...))`
+
+Custom providers are supported:
+
+```go
+type MyPartition struct{}
+
+func (MyPartition) Spec() dag.CustomPartitionSpec {
+	return dag.CustomPartitionSpec{
+		Kind:    dag.PartitionDefinitionStatic,
+		Version: "v1",
+		Assets:  []string{"raw_articles"},
+		Config:  map[string]any{"group": "regions"},
+	}
+}
+
+func (MyPartition) Keys(ctx context.Context, now time.Time) ([]string, error) {
+	return []string{"us", "eu"}, nil
+}
+
+extract := dag.Op[ops.ExtractInput, ops.ExtractOutput]("extract", myOps.Extract).
+	WithCustomPartition(MyPartition{})
+```
+
+Partition-aware ops can read typed run partition context:
+
+```go
+func (o *Ops) Extract(ctx context.Context, in ExtractInput) (ExtractOutput, error) {
+	if partition, ok := dag.RunPartitionMetaFromContext(ctx); ok {
+		slog.Info("partition run",
+			"mode", partition.SelectionMode,
+			"keys", partition.Keys,
+			"backfill_key", partition.BackfillKey,
+		)
+	}
+	// ...
+	return ExtractOutput{}, nil
+}
+```
+
+On startup, DAGGO syncs op partition metadata into `partition_definitions` (`target_kind='op'`) and `partition_keys` automatically.
+
+When partition-targeted runs finish, DAGGO reconciles linked backfill state automatically:
+- updates `backfill_partitions` rows for the run to `materialized` or `failed_downstream`
+- updates aggregate `backfills` counts/status (`running`, `completed`, `failed`)
+
+Current experimental constraint: if multiple ops in a job are partitioned, they must resolve to one shared partition domain for backfill workflows.
+
+For backfill workflow and RPC examples, see [docs/PARTITIONS.md](docs/PARTITIONS.md).
+
 ## Startup Flow
 
 Calling `daggo.Run(...)` gives new users a working runtime immediately:
@@ -423,6 +493,7 @@ go run ./cmd/api
 ## Documentation
 
 - Usage guide: [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md)
+- Partitions and backfills: [docs/PARTITIONS.md](docs/PARTITIONS.md)
 - Coming from Dagster: [docs/COMING_FROM_DAGSTER.md](docs/COMING_FROM_DAGSTER.md)
 - PostgreSQL runtime plan: [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md)
 - Deploy-drain behavior: [docs/WILL_DEPLOY_DRAIN_LOCK_PLAN.md](docs/WILL_DEPLOY_DRAIN_LOCK_PLAN.md)

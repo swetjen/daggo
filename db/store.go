@@ -42,6 +42,7 @@ type Store interface {
 	RunEventGetManyByRunID(context.Context, RunEventGetManyByRunIDParams) ([]RunEvent, error)
 	RunEventCountByRunID(context.Context, int64) (int64, error)
 	RunPartitionTargetUpsert(context.Context, RunPartitionTargetUpsertParams) (RunPartitionTarget, error)
+	RunPartitionTargetGetByRunID(context.Context, int64) (RunPartitionTarget, error)
 	RunSystemTagUpsert(context.Context, RunSystemTagUpsertParams) (RunSystemTag, error)
 
 	BackfillGetMany(context.Context, BackfillGetManyParams) ([]Backfill, error)
@@ -50,15 +51,22 @@ type Store interface {
 	BackfillCountByJobID(context.Context, int64) (int64, error)
 	BackfillGetByKey(context.Context, string) (Backfill, error)
 	BackfillCreate(context.Context, BackfillCreateParams) (Backfill, error)
+	BackfillUpdateStatus(context.Context, BackfillUpdateStatusParams) (Backfill, error)
 	BackfillPartitionUpsert(context.Context, BackfillPartitionUpsertParams) (BackfillPartition, error)
 	BackfillPartitionUpdateStatusByBackfillIDAndPartitionKey(context.Context, BackfillPartitionUpdateStatusByBackfillIDAndPartitionKeyParams) (BackfillPartition, error)
 	BackfillPartitionGetManyByBackfillID(context.Context, BackfillPartitionGetManyByBackfillIDParams) ([]BackfillPartition, error)
+	BackfillPartitionGetManyByRunID(context.Context, int64) ([]BackfillPartition, error)
 	BackfillPartitionCountByBackfillID(context.Context, int64) (int64, error)
 	BackfillPartitionCountByBackfillIDAndStatus(context.Context, BackfillPartitionCountByBackfillIDAndStatusParams) (int64, error)
 	RunPartitionTargetGetManyByBackfillKey(context.Context, RunPartitionTargetGetManyByBackfillKeyParams) ([]RunPartitionTarget, error)
+	PartitionDefinitionGetManyByJobID(context.Context, int64) ([]PartitionDefinition, error)
 	PartitionDefinitionGetByJobIDAndTarget(context.Context, PartitionDefinitionGetByJobIDAndTargetParams) (PartitionDefinition, error)
+	PartitionDefinitionUpsert(context.Context, PartitionDefinitionUpsertParams) (PartitionDefinition, error)
+	PartitionDefinitionDeleteByID(context.Context, int64) error
 	PartitionKeyGetManyByDefinitionID(context.Context, PartitionKeyGetManyByDefinitionIDParams) ([]PartitionKey, error)
 	PartitionKeyCountByDefinitionID(context.Context, int64) (int64, error)
+	PartitionKeyUpsert(context.Context, PartitionKeyUpsertParams) (PartitionKey, error)
+	PartitionKeyDeleteByDefinitionID(context.Context, int64) error
 
 	SchedulerHeartbeatUpsert(context.Context, SchedulerHeartbeatUpsertParams) (SchedulerHeartbeat, error)
 	SchedulerScheduleStateGetByJobKeyScheduleKey(context.Context, SchedulerScheduleStateGetByJobKeyScheduleKeyParams) (SchedulerScheduleState, error)

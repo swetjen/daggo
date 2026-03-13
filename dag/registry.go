@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/swetjen/daggo/db"
 )
@@ -161,10 +162,17 @@ func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB)
 		}
 
 		for idx, step := range job.Steps {
-			metaBytes, err := json.Marshal(map[string]any{
+			metadata := map[string]any{
 				"depends_on": step.DependsOn,
 				"bindings":   step.Bindings,
-			})
+			}
+			if step.partitionDefinition != nil {
+				metadata["partition"] = map[string]any{
+					"kind":   step.partitionDefinition.Kind(),
+					"assets": cloneStrings(step.partitionAssets),
+				}
+			}
+			metaBytes, err := json.Marshal(metadata)
 			if err != nil {
 				_ = tx.Rollback()
 				return err
@@ -192,6 +200,11 @@ func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB)
 					return fmt.Errorf("create edge %s/%s<- %s: %w", job.Key, step.Key, dep, err)
 				}
 			}
+		}
+
+		if err := syncJobPartitions(ctx, txQueries, job, jobRow.ID, time.Now().UTC()); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("sync partitions for job %s: %w", job.Key, err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -276,4 +289,156 @@ func topologicalOrder(job JobDefinition) ([]StepDefinition, error) {
 		return nil, errors.New("cycle detected")
 	}
 	return ordered, nil
+}
+
+func syncJobPartitions(ctx context.Context, store db.Store, job JobDefinition, jobID int64, now time.Time) error {
+	existing, err := store.PartitionDefinitionGetManyByJobID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+
+	partitionedSteps := make(map[string]StepDefinition)
+	partitionFingerprint := ""
+
+	for _, step := range job.Steps {
+		if step.partitionDefinition == nil {
+			continue
+		}
+
+		definitionKind, definitionJSON, err := serializePartitionDefinition(step.partitionDefinition)
+		if err != nil {
+			return fmt.Errorf("step %s definition serialization failed: %w", step.Key, err)
+		}
+		keys, err := step.partitionDefinition.PartitionKeys(ctx, now)
+		if err != nil {
+			return fmt.Errorf("step %s partition keys failed: %w", step.Key, err)
+		}
+		keys, err = normalizeOrderedKeys(keys, "partition key")
+		if err != nil {
+			return fmt.Errorf("step %s partition keys invalid: %w", step.Key, err)
+		}
+
+		currentFingerprint := strings.Join([]string{string(definitionKind), definitionJSON, strings.Join(keys, "\x1f")}, "|")
+		if partitionFingerprint == "" {
+			partitionFingerprint = currentFingerprint
+		} else if partitionFingerprint != currentFingerprint {
+			return fmt.Errorf("multiple partition domains found across ops in job %q; v1 supports a single shared partition domain per job", job.Key)
+		}
+
+		definitionRow, err := store.PartitionDefinitionUpsert(ctx, db.PartitionDefinitionUpsertParams{
+			JobID:          jobID,
+			TargetKind:     "op",
+			TargetKey:      step.Key,
+			DefinitionKind: string(definitionKind),
+			DefinitionJson: definitionJSON,
+			Enabled:        1,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := store.PartitionKeyDeleteByDefinitionID(ctx, definitionRow.ID); err != nil {
+			return err
+		}
+		for index, key := range keys {
+			if _, err := store.PartitionKeyUpsert(ctx, db.PartitionKeyUpsertParams{
+				PartitionDefinitionID: definitionRow.ID,
+				PartitionKey:          key,
+				SortIndex:             int64(index),
+				IsActive:              1,
+			}); err != nil {
+				return err
+			}
+		}
+
+		partitionedSteps[step.Key] = step
+	}
+
+	for _, definition := range existing {
+		if definition.TargetKind != "op" {
+			continue
+		}
+		if _, exists := partitionedSteps[definition.TargetKey]; exists {
+			continue
+		}
+		if err := store.PartitionDefinitionDeleteByID(ctx, definition.ID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func serializePartitionDefinition(definition PartitionDefinition) (PartitionDefinitionKind, string, error) {
+	if definition == nil {
+		return "", "", fmt.Errorf("partition definition is required")
+	}
+
+	switch typed := definition.(type) {
+	case StaticPartitionDefinition:
+		payload, err := json.Marshal(map[string]any{
+			"keys": cloneStrings(typed.keys),
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return typed.Kind(), string(payload), nil
+	case DynamicPartitionDefinition:
+		payload, err := json.Marshal(map[string]any{
+			"name": strings.TrimSpace(typed.Name),
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return typed.Kind(), string(payload), nil
+	case TimeWindowPartitionDefinition:
+		location := ""
+		if typed.Location != nil {
+			location = typed.Location.String()
+		}
+		payload, err := json.Marshal(map[string]any{
+			"cadence":         typed.Cadence,
+			"start":           typed.Start.UTC().Format(time.RFC3339Nano),
+			"end_offset":      typed.EndOffset,
+			"timezone":        location,
+			"format":          typed.Format,
+			"minute_interval": typed.MinuteInterval,
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return typed.Kind(), string(payload), nil
+	case *MultiPartitionDefinition:
+		if typed == nil {
+			return "", "", fmt.Errorf("multi partition definition is nil")
+		}
+		dimensions := make(map[string]map[string]any, len(typed.dimensions))
+		for _, name := range typed.dimensionNames {
+			dimension := typed.dimensions[name]
+			kind, encoded, err := serializePartitionDefinition(dimension)
+			if err != nil {
+				return "", "", err
+			}
+			dimensions[name] = map[string]any{
+				"kind":   kind,
+				"config": json.RawMessage(encoded),
+			}
+		}
+		payload, err := json.Marshal(map[string]any{
+			"dimensions": dimensions,
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return typed.Kind(), string(payload), nil
+	case customPartitionDefinition:
+		spec := typed.Spec()
+		configJSON, err := customPartitionSpecJSON(spec)
+		if err != nil {
+			return "", "", err
+		}
+		return typed.Kind(), configJSON, nil
+	default:
+		return "", "", fmt.Errorf("unsupported partition definition type %T", definition)
+	}
 }

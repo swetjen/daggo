@@ -2,8 +2,10 @@ package dag
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +25,43 @@ const (
 type PartitionDefinition interface {
 	Kind() PartitionDefinitionKind
 	PartitionKeys(context.Context, time.Time) ([]string, error)
+}
+
+type CustomPartitionSpec struct {
+	Kind    PartitionDefinitionKind `json:"kind"`
+	Version string                  `json:"version,omitempty"`
+	Assets  []string                `json:"assets,omitempty"`
+	Config  any                     `json:"config,omitempty"`
+}
+
+type CustomPartition interface {
+	Spec() CustomPartitionSpec
+	Keys(context.Context, time.Time) ([]string, error)
+}
+
+type customPartitionDefinition struct {
+	provider CustomPartition
+}
+
+func (d customPartitionDefinition) Kind() PartitionDefinitionKind {
+	spec := d.provider.Spec()
+	kind := PartitionDefinitionKind(strings.TrimSpace(string(spec.Kind)))
+	if kind == "" {
+		return PartitionDefinitionDynamic
+	}
+	return kind
+}
+
+func (d customPartitionDefinition) PartitionKeys(ctx context.Context, now time.Time) ([]string, error) {
+	keys, err := d.provider.Keys(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeOrderedKeys(keys, "partition key")
+}
+
+func (d customPartitionDefinition) Spec() CustomPartitionSpec {
+	return d.provider.Spec()
 }
 
 type StaticPartitionDefinition struct {
@@ -76,16 +115,20 @@ func (d DynamicPartitionDefinition) PartitionKeys(ctx context.Context, _ time.Ti
 type TimePartitionCadence string
 
 const (
-	TimePartitionCadenceDaily  TimePartitionCadence = "daily"
-	TimePartitionCadenceHourly TimePartitionCadence = "hourly"
+	TimePartitionCadenceMinutely TimePartitionCadence = "minutely"
+	TimePartitionCadenceHourly   TimePartitionCadence = "hourly"
+	TimePartitionCadenceDaily    TimePartitionCadence = "daily"
+	TimePartitionCadenceWeekly   TimePartitionCadence = "weekly"
+	TimePartitionCadenceMonthly  TimePartitionCadence = "monthly"
 )
 
 type TimeWindowPartitionDefinition struct {
-	Cadence   TimePartitionCadence
-	Start     time.Time
-	EndOffset int
-	Location  *time.Location
-	Format    string
+	Cadence        TimePartitionCadence
+	Start          time.Time
+	EndOffset      int
+	Location       *time.Location
+	Format         string
+	MinuteInterval int
 }
 
 func (d TimeWindowPartitionDefinition) Kind() PartitionDefinitionKind {
@@ -96,10 +139,12 @@ func (d TimeWindowPartitionDefinition) PartitionKeys(_ context.Context, now time
 	if d.Start.IsZero() {
 		return nil, fmt.Errorf("time window partition start is required")
 	}
-	step, err := d.stepDuration()
-	if err != nil {
-		return nil, err
+	switch d.Cadence {
+	case TimePartitionCadenceMinutely, TimePartitionCadenceHourly, TimePartitionCadenceDaily, TimePartitionCadenceWeekly, TimePartitionCadenceMonthly:
+	default:
+		return nil, fmt.Errorf("unsupported time partition cadence %q", d.Cadence)
 	}
+	interval := d.interval()
 
 	location := d.Location
 	if location == nil {
@@ -110,26 +155,42 @@ func (d TimeWindowPartitionDefinition) PartitionKeys(_ context.Context, now time
 		format = d.defaultFormat()
 	}
 
-	start := truncateToCadence(d.Start.In(location), d.Cadence)
-	current := truncateToCadence(now.In(location), d.Cadence)
-	end := current.Add(time.Duration(d.EndOffset) * step)
+	start := truncateToCadence(d.Start.In(location), d.Cadence, interval)
+	current := truncateToCadence(now.In(location), d.Cadence, interval)
+	end := shiftByCadence(current, d.Cadence, interval, d.EndOffset)
 	if start.After(end) {
 		return []string{}, nil
 	}
 
 	keys := make([]string, 0)
-	for cursor := start; !cursor.After(end); cursor = cursor.Add(step) {
+	for cursor := start; !cursor.After(end); cursor = shiftByCadence(cursor, d.Cadence, interval, 1) {
 		keys = append(keys, cursor.Format(format))
 	}
 	return keys, nil
 }
 
+func (d TimeWindowPartitionDefinition) interval() int {
+	if d.Cadence != TimePartitionCadenceMinutely {
+		return 1
+	}
+	if d.MinuteInterval <= 0 {
+		return 1
+	}
+	return d.MinuteInterval
+}
+
 func (d TimeWindowPartitionDefinition) stepDuration() (time.Duration, error) {
 	switch d.Cadence {
-	case TimePartitionCadenceDaily:
-		return 24 * time.Hour, nil
+	case TimePartitionCadenceMinutely:
+		return time.Duration(d.interval()) * time.Minute, nil
 	case TimePartitionCadenceHourly:
 		return time.Hour, nil
+	case TimePartitionCadenceDaily:
+		return 24 * time.Hour, nil
+	case TimePartitionCadenceWeekly:
+		return 7 * 24 * time.Hour, nil
+	case TimePartitionCadenceMonthly:
+		return 0, fmt.Errorf("monthly cadence does not map to a fixed duration")
 	default:
 		return 0, fmt.Errorf("unsupported time partition cadence %q", d.Cadence)
 	}
@@ -137,17 +198,39 @@ func (d TimeWindowPartitionDefinition) stepDuration() (time.Duration, error) {
 
 func (d TimeWindowPartitionDefinition) defaultFormat() string {
 	switch d.Cadence {
+	case TimePartitionCadenceMinutely:
+		return "2006-01-02T15:04"
 	case TimePartitionCadenceHourly:
 		return "2006-01-02T15"
+	case TimePartitionCadenceWeekly:
+		return "2006-01-02"
+	case TimePartitionCadenceMonthly:
+		return "2006-01"
 	default:
 		return "2006-01-02"
 	}
 }
 
-func truncateToCadence(value time.Time, cadence TimePartitionCadence) time.Time {
+func truncateToCadence(value time.Time, cadence TimePartitionCadence, interval int) time.Time {
 	switch cadence {
+	case TimePartitionCadenceMinutely:
+		base := value.Truncate(time.Minute)
+		if interval <= 1 {
+			return base
+		}
+		minute := base.Minute()
+		alignedMinute := minute - (minute % interval)
+		return time.Date(base.Year(), base.Month(), base.Day(), base.Hour(), alignedMinute, 0, 0, base.Location())
 	case TimePartitionCadenceHourly:
 		return value.Truncate(time.Hour)
+	case TimePartitionCadenceWeekly:
+		year, month, day := value.Date()
+		base := time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+		weekday := (int(base.Weekday()) + 6) % 7 // Monday=0
+		return base.AddDate(0, 0, -weekday)
+	case TimePartitionCadenceMonthly:
+		year, month, _ := value.Date()
+		return time.Date(year, month, 1, 0, 0, 0, 0, value.Location())
 	default:
 		year, month, day := value.Date()
 		return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
@@ -224,6 +307,165 @@ func (d *MultiPartitionDefinition) PartitionKeys(ctx context.Context, now time.T
 		}
 	}
 	return out, nil
+}
+
+type PartitionDimension struct {
+	Name       string
+	Definition PartitionDefinition
+}
+
+func Dimension(name string, definition PartitionDefinition) PartitionDimension {
+	return PartitionDimension{Name: name, Definition: definition}
+}
+
+type TimePartitionOption func(*TimeWindowPartitionDefinition)
+
+func WithTimezone(name string) TimePartitionOption {
+	return func(definition *TimeWindowPartitionDefinition) {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			panic("dag.WithTimezone: timezone is required")
+		}
+		location, err := time.LoadLocation(trimmed)
+		if err != nil {
+			panic(fmt.Sprintf("dag.WithTimezone: invalid timezone %q: %v", trimmed, err))
+		}
+		definition.Location = location
+	}
+}
+
+func WithLocation(location *time.Location) TimePartitionOption {
+	return func(definition *TimeWindowPartitionDefinition) {
+		if location == nil {
+			panic("dag.WithLocation: location is required")
+		}
+		definition.Location = location
+	}
+}
+
+func WithEndOffset(offset int) TimePartitionOption {
+	return func(definition *TimeWindowPartitionDefinition) {
+		definition.EndOffset = offset
+	}
+}
+
+func WithFormat(layout string) TimePartitionOption {
+	return func(definition *TimeWindowPartitionDefinition) {
+		trimmed := strings.TrimSpace(layout)
+		if trimmed == "" {
+			panic("dag.WithFormat: format is required")
+		}
+		definition.Format = trimmed
+	}
+}
+
+func StringPartitions(keys ...string) StaticPartitionDefinition {
+	definition, err := NewStaticPartitionDefinition(keys)
+	if err != nil {
+		panic(fmt.Sprintf("dag.StringPartitions: %v", err))
+	}
+	return definition
+}
+
+func MinutelyEvery(intervalMinutes int, start time.Time, opts ...TimePartitionOption) TimeWindowPartitionDefinition {
+	if intervalMinutes <= 0 {
+		panic("dag.MinutelyEvery: intervalMinutes must be > 0")
+	}
+	definition := TimeWindowPartitionDefinition{
+		Cadence:        TimePartitionCadenceMinutely,
+		Start:          start,
+		MinuteInterval: intervalMinutes,
+	}
+	applyTimePartitionOptions(&definition, opts...)
+	return definition
+}
+
+func HourlyFrom(start time.Time, opts ...TimePartitionOption) TimeWindowPartitionDefinition {
+	definition := TimeWindowPartitionDefinition{
+		Cadence: TimePartitionCadenceHourly,
+		Start:   start,
+	}
+	applyTimePartitionOptions(&definition, opts...)
+	return definition
+}
+
+func DailyFrom(start time.Time, opts ...TimePartitionOption) TimeWindowPartitionDefinition {
+	definition := TimeWindowPartitionDefinition{
+		Cadence: TimePartitionCadenceDaily,
+		Start:   start,
+	}
+	applyTimePartitionOptions(&definition, opts...)
+	return definition
+}
+
+func WeeklyFrom(start time.Time, opts ...TimePartitionOption) TimeWindowPartitionDefinition {
+	definition := TimeWindowPartitionDefinition{
+		Cadence: TimePartitionCadenceWeekly,
+		Start:   start,
+	}
+	applyTimePartitionOptions(&definition, opts...)
+	return definition
+}
+
+func MonthlyFrom(start time.Time, opts ...TimePartitionOption) TimeWindowPartitionDefinition {
+	definition := TimeWindowPartitionDefinition{
+		Cadence: TimePartitionCadenceMonthly,
+		Start:   start,
+	}
+	applyTimePartitionOptions(&definition, opts...)
+	return definition
+}
+
+func MultiPartitions(dimensions ...PartitionDimension) *MultiPartitionDefinition {
+	if len(dimensions) != 2 {
+		panic(fmt.Sprintf("dag.MultiPartitions: expected exactly 2 dimensions, got %d", len(dimensions)))
+	}
+	byName := make(map[string]PartitionDefinition, len(dimensions))
+	for _, dimension := range dimensions {
+		name := strings.TrimSpace(dimension.Name)
+		if name == "" {
+			panic("dag.MultiPartitions: dimension name is required")
+		}
+		if dimension.Definition == nil {
+			panic(fmt.Sprintf("dag.MultiPartitions: definition is required for dimension %q", name))
+		}
+		if _, exists := byName[name]; exists {
+			panic(fmt.Sprintf("dag.MultiPartitions: duplicate dimension %q", name))
+		}
+		byName[name] = dimension.Definition
+	}
+	definition, err := NewMultiPartitionDefinition(byName)
+	if err != nil {
+		panic(fmt.Sprintf("dag.MultiPartitions: %v", err))
+	}
+	return definition
+}
+
+func NewCustomPartitionDefinition(provider CustomPartition) (PartitionDefinition, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("custom partition provider is required")
+	}
+	value := reflect.ValueOf(provider)
+	if value.Kind() == reflect.Ptr && value.IsNil() {
+		return nil, fmt.Errorf("custom partition provider is required")
+	}
+	spec := provider.Spec()
+	if strings.TrimSpace(string(spec.Kind)) == "" {
+		return nil, fmt.Errorf("custom partition kind is required")
+	}
+	return customPartitionDefinition{provider: provider}, nil
+}
+
+func customPartitionSpecJSON(spec CustomPartitionSpec) (string, error) {
+	payload := map[string]any{
+		"version": strings.TrimSpace(spec.Version),
+		"config":  spec.Config,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 type PartitionSelectionClauseKind string
@@ -460,4 +702,53 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func normalizeAssetKeys(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
+}
+
+func shiftByCadence(value time.Time, cadence TimePartitionCadence, interval int, count int) time.Time {
+	if count == 0 {
+		return value
+	}
+	switch cadence {
+	case TimePartitionCadenceMinutely:
+		return value.Add(time.Duration(interval*count) * time.Minute)
+	case TimePartitionCadenceHourly:
+		return value.Add(time.Duration(count) * time.Hour)
+	case TimePartitionCadenceDaily:
+		return value.AddDate(0, 0, count)
+	case TimePartitionCadenceWeekly:
+		return value.AddDate(0, 0, count*7)
+	case TimePartitionCadenceMonthly:
+		return value.AddDate(0, count, 0)
+	default:
+		return value.AddDate(0, 0, count)
+	}
+}
+
+func applyTimePartitionOptions(definition *TimeWindowPartitionDefinition, opts ...TimePartitionOption) {
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(definition)
+	}
 }

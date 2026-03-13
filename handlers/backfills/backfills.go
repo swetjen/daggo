@@ -97,9 +97,10 @@ type BackfillPartition struct {
 }
 
 type BackfillsGetManyResponse struct {
-	Data  []BackfillSummary `json:"data"`
-	Total int64             `json:"total"`
-	Error string            `json:"error,omitempty"`
+	Data             []BackfillSummary `json:"data"`
+	Total            int64             `json:"total"`
+	JobHasPartitions bool              `json:"job_has_partitions"`
+	Error            string            `json:"error,omitempty"`
 }
 
 type BackfillByKeyResponse struct {
@@ -122,18 +123,26 @@ func (h *Handlers) BackfillsGetMany(ctx context.Context, req BackfillsGetManyReq
 	limit, offset := normalizePagination(req.Limit, req.Offset)
 
 	var (
-		rows  []db.Backfill
-		total int64
-		err   error
+		rows             []db.Backfill
+		total            int64
+		jobHasPartitions bool
+		err              error
 	)
 	jobKey := strings.TrimSpace(req.JobKey)
 	if jobKey != "" {
 		job, lookupErr := h.app.DB.JobGetByKey(ctx, jobKey)
 		if lookupErr != nil {
 			if errors.Is(lookupErr, sql.ErrNoRows) {
-				return BackfillsGetManyResponse{Data: []BackfillSummary{}, Total: 0}, rpc.StatusOK
+				return BackfillsGetManyResponse{Data: []BackfillSummary{}, Total: 0, JobHasPartitions: false}, rpc.StatusOK
 			}
 			return BackfillsGetManyResponse{Error: "failed to load job"}, rpc.StatusError
+		}
+		_, foundPartitionDefinition, partitionErr := h.resolveJobPartitionDefinition(ctx, job.ID)
+		if partitionErr != nil {
+			return BackfillsGetManyResponse{Error: "failed to load partition definition"}, rpc.StatusError
+		}
+		if foundPartitionDefinition {
+			jobHasPartitions = true
 		}
 		rows, err = h.app.DB.BackfillGetManyByJobID(ctx, db.BackfillGetManyByJobIDParams{
 			JobID:  job.ID,
@@ -169,7 +178,7 @@ func (h *Handlers) BackfillsGetMany(ctx context.Context, req BackfillsGetManyReq
 		}
 		data = append(data, summary)
 	}
-	return BackfillsGetManyResponse{Data: data, Total: total}, rpc.StatusOK
+	return BackfillsGetManyResponse{Data: data, Total: total, JobHasPartitions: jobHasPartitions}, rpc.StatusOK
 }
 
 func (h *Handlers) BackfillByKey(ctx context.Context, req BackfillByKeyRequest) (BackfillByKeyResponse, int) {
@@ -241,16 +250,12 @@ func (h *Handlers) BackfillLaunch(ctx context.Context, req BackfillLaunchRequest
 		return BackfillLaunchResponse{Error: "failed to load job"}, rpc.StatusError
 	}
 
-	partitionDefinition, err := h.app.DB.PartitionDefinitionGetByJobIDAndTarget(ctx, db.PartitionDefinitionGetByJobIDAndTargetParams{
-		JobID:      job.ID,
-		TargetKind: "job",
-		TargetKey:  "",
-	})
+	partitionDefinition, foundPartitionDefinition, err := h.resolveJobPartitionDefinition(ctx, job.ID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return BackfillLaunchResponse{Error: "job has no partition definition"}, rpc.StatusInvalid
-		}
 		return BackfillLaunchResponse{Error: "failed to load partition definition"}, rpc.StatusError
+	}
+	if !foundPartitionDefinition {
+		return BackfillLaunchResponse{Error: "job has no partition definition"}, rpc.StatusInvalid
 	}
 	totalPartitionKeys, err := h.app.DB.PartitionKeyCountByDefinitionID(ctx, partitionDefinition.ID)
 	if err != nil {
@@ -606,6 +611,51 @@ func isTerminalBackfillStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (h *Handlers) resolveJobPartitionDefinition(ctx context.Context, jobID int64) (db.PartitionDefinition, bool, error) {
+	definitions, err := h.app.DB.PartitionDefinitionGetManyByJobID(ctx, jobID)
+	if err != nil {
+		return db.PartitionDefinition{}, false, err
+	}
+	opDefinitions := make([]db.PartitionDefinition, 0)
+	for _, definition := range definitions {
+		if definition.TargetKind != "op" {
+			continue
+		}
+		if strings.TrimSpace(definition.TargetKey) == "" {
+			continue
+		}
+		if definition.Enabled == 0 {
+			continue
+		}
+		opDefinitions = append(opDefinitions, definition)
+	}
+	if len(opDefinitions) > 0 {
+		base := opDefinitions[0]
+		for _, definition := range opDefinitions[1:] {
+			if definition.DefinitionKind != base.DefinitionKind || definition.DefinitionJson != base.DefinitionJson {
+				return db.PartitionDefinition{}, false, fmt.Errorf("job has multiple op partition definitions with different domains")
+			}
+		}
+		return base, true, nil
+	}
+
+	legacy, err := h.app.DB.PartitionDefinitionGetByJobIDAndTarget(ctx, db.PartitionDefinitionGetByJobIDAndTargetParams{
+		JobID:      jobID,
+		TargetKind: "job",
+		TargetKey:  "",
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return db.PartitionDefinition{}, false, nil
+		}
+		return db.PartitionDefinition{}, false, err
+	}
+	if legacy.Enabled == 0 {
+		return db.PartitionDefinition{}, false, nil
+	}
+	return legacy, true, nil
 }
 
 func normalizePagination(limit, offset int64) (int64, int64) {

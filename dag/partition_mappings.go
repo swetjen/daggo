@@ -225,7 +225,7 @@ func (m TimeWindowPartitionMapping) MapUpstreamPartitionKeys(
 			searchStart, searchEnd = searchEnd, searchStart
 		}
 
-		cursor := truncateToCadence(searchStart, upstreamTimeDef.Cadence)
+		cursor := truncateToCadence(searchStart, upstreamTimeDef.Cadence, upstreamTimeDef.interval())
 		for cursor.Before(searchEnd) {
 			windowEnd := cursor.Add(upstreamStep)
 			if windowEnd.After(searchStart) && cursor.Before(searchEnd) {
@@ -254,7 +254,7 @@ func parseTimeWindowPartitionKey(key string, definition TimeWindowPartitionDefin
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse time window partition key %q: %w", key, err)
 	}
-	return truncateToCadence(parsed, definition.Cadence), nil
+	return truncateToCadence(parsed, definition.Cadence, definition.interval()), nil
 }
 
 type MultiPartitionDimensionMapping struct {

@@ -257,7 +257,9 @@ cfg.Database.Postgres.SSLMode = "require"
 
 ## Experimental Partitions + Backfills
 
-DAGGO now includes partition/backfill foundations, launch/status RPC primitives, and initial admin UI integration.
+DAGGO now supports op-level partitions with backfill launch/status RPC routes and admin UI controls.
+
+Detailed setup and workflow guidance lives in [docs/PARTITIONS.md](PARTITIONS.md).
 
 Current backfill RPC routes:
 
@@ -267,13 +269,20 @@ Current backfill RPC routes:
 
 Current behavior:
 
-- Partition definitions and keys are stored in DB metadata tables.
+- Partition definitions are attached to ops (`dag.Op(...).WithPartition(...)` or `WithCustomPartition(...)`).
+- Typed helpers are available for common partition models:
+  - `StringPartitions`, `MinutelyEvery`, `HourlyFrom`, `DailyFrom`, `WeeklyFrom`, `MonthlyFrom`, `MultiPartitions`
+- On startup, registry sync upserts op partition metadata into `partition_definitions` (`target_kind='op'`) and `partition_keys`.
 - Backfill launch validates partition selections and applies guardrails.
 - Launch persists:
   - backfill records + partition subset rows
   - per-run partition targeting metadata
   - system run tags for partition/backfill context
+- Run completion/failure/cancel automatically reconciles backfill state:
+  - run-linked partition rows move to `materialized` or `failed_downstream`
+  - backfill aggregate counts/status are updated automatically
 - Status endpoints expose aggregate subset accounting and completion signals.
+- Op runtime can read typed partition metadata from context with `dag.RunPartitionMetaFromContext(ctx)`.
 - Job detail UI now includes:
   - selection controls (`all`, `single`, `range`, `subset`)
   - launch controls (`multi_run` + max-per-run, `single_run`)
@@ -281,6 +290,7 @@ Current behavior:
 
 Current limitations:
 
+- Backfill UI targets one shared partition domain per job (all partitioned ops in a job must resolve to the same keyspace).
 - Partition key introspection/auto-complete is not exposed in UI yet (keys are entered directly for single/range/subset selection).
 - Asset-level orchestration semantics are still evolving.
 - Mapping/lineage APIs are available in package-level domain code, with UI/API exposure expanding incrementally.

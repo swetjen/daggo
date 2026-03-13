@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 type testOutput struct {
@@ -305,6 +306,67 @@ func TestAddSchedulePreservesExplicitKey(t *testing.T) {
 
 	if got := job.Schedules[0].Key; got != "custom_hourly" {
 		t.Fatalf("expected explicit key custom_hourly, got %q", got)
+	}
+}
+
+func TestNodeWithPartitionAttachesDefinition(t *testing.T) {
+	source := Op[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+		return testOutput{Name: "ok"}, nil
+	}).WithPartition(DailyFrom(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), "asset_one")
+
+	job, err := NewJob("partitioned_job").Add(source).Build()
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+
+	step := mustFindStep(t, job, "source")
+	if step.partitionDefinition == nil {
+		t.Fatalf("expected step partition definition")
+	}
+	if step.partitionDefinition.Kind() != PartitionDefinitionTimeWindow {
+		t.Fatalf("expected time window partition kind, got %q", step.partitionDefinition.Kind())
+	}
+	if len(step.partitionAssets) != 1 || step.partitionAssets[0] != "asset_one" {
+		t.Fatalf("expected one partition asset, got %v", step.partitionAssets)
+	}
+}
+
+type testCustomPartition struct{}
+
+func (testCustomPartition) Spec() CustomPartitionSpec {
+	return CustomPartitionSpec{
+		Kind:    PartitionDefinitionStatic,
+		Version: "v1",
+		Assets:  []string{"custom_asset"},
+		Config: map[string]any{
+			"group": "regions",
+		},
+	}
+}
+
+func (testCustomPartition) Keys(_ context.Context, _ time.Time) ([]string, error) {
+	return []string{"us", "eu"}, nil
+}
+
+func TestNodeWithCustomPartitionAttachesDefinition(t *testing.T) {
+	source := Op[NoInput, testOutput]("source", func(_ context.Context, _ NoInput) (testOutput, error) {
+		return testOutput{Name: "ok"}, nil
+	}).WithCustomPartition(testCustomPartition{})
+
+	job, err := NewJob("custom_partitioned_job").Add(source).Build()
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+
+	step := mustFindStep(t, job, "source")
+	if step.partitionDefinition == nil {
+		t.Fatalf("expected custom partition definition")
+	}
+	if step.partitionDefinition.Kind() != PartitionDefinitionStatic {
+		t.Fatalf("expected custom kind %q, got %q", PartitionDefinitionStatic, step.partitionDefinition.Kind())
+	}
+	if len(step.partitionAssets) != 1 || step.partitionAssets[0] != "custom_asset" {
+		t.Fatalf("expected custom assets to be attached, got %v", step.partitionAssets)
 	}
 }
 
