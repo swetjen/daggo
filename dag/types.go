@@ -11,6 +11,7 @@ type RunMeta struct {
 	StepKey string
 	Attempt int64
 	Params  map[string]any
+	Queue   *RunQueueMeta
 }
 
 type runMetaKey struct{}

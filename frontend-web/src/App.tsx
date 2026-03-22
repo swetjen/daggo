@@ -84,6 +84,82 @@ type RunEvent = {
   created_at: string;
 };
 
+type QueueJob = {
+  job_key: string;
+  display_name: string;
+};
+
+type QueueSummary = {
+  id: number;
+  queue_key: string;
+  display_name: string;
+  description: string;
+  route_path: string;
+  load_mode: string;
+  load_poll_every_seconds: number;
+  jobs: QueueJob[];
+  item_count: number;
+  partition_count: number;
+  queued_count: number;
+  running_count: number;
+  complete_count: number;
+  failed_count: number;
+};
+
+type QueueItemSummary = {
+  id: number;
+  queue_item_key: string;
+  partition_key: string;
+  status: string;
+  external_key: string;
+  error_message: string;
+  queued_at: string;
+  started_at: string;
+  completed_at: string;
+};
+
+type QueuePartitionSummary = {
+  latest_queue_item_id: number;
+  queue_item_key: string;
+  partition_key: string;
+  status: string;
+  external_key: string;
+  error_message: string;
+  queued_at: string;
+  started_at: string;
+  completed_at: string;
+};
+
+type QueueLinkedRun = {
+  id: number;
+  run_key: string;
+  job_key: string;
+  job_display_name: string;
+  status: string;
+  triggered_by: string;
+  queued_at: string;
+  started_at: string;
+  completed_at: string;
+  error_message: string;
+};
+
+type QueueItemDetail = {
+  id: number;
+  queue_id: number;
+  queue_key: string;
+  queue_display_name: string;
+  queue_item_key: string;
+  partition_key: string;
+  status: string;
+  external_key: string;
+  payload_json: string;
+  error_message: string;
+  queued_at: string;
+  started_at: string;
+  completed_at: string;
+  metadata: Record<string, Record<string, any>>;
+};
+
 type JobListResponse = {
   data?: Job[];
   total?: number;
@@ -125,6 +201,35 @@ type RunEventsGetManyResponse = {
   error?: string;
 };
 
+type QueuesGetManyResponse = {
+  data?: QueueSummary[];
+  total?: number;
+  error?: string;
+};
+
+type QueueItemsGetManyResponse = {
+  data?: QueueItemSummary[];
+  total?: number;
+  error?: string;
+};
+
+type QueuePartitionsGetManyResponse = {
+  data?: QueuePartitionSummary[];
+  total?: number;
+  error?: string;
+};
+
+type QueueItemByIDResponse = {
+  item?: QueueItemDetail;
+  runs?: QueueLinkedRun[];
+  error?: string;
+};
+
+type SystemInfoResponse = {
+  version?: string;
+  error?: string;
+};
+
 type SchedulesResponse = {
   data?: {
     id: number;
@@ -142,12 +247,14 @@ type SchedulesResponse = {
 
 type ScheduleRow = NonNullable<SchedulesResponse["data"]>[number];
 
-type NavSection = "overview" | "jobs" | "runs";
+type NavSection = "overview" | "jobs" | "queues" | "runs";
 
 type AppRoute = {
   section: NavSection;
   path: string;
   jobKey: string;
+  queueKey: string;
+  queueItemID: number;
   runKey: string;
 };
 
@@ -166,6 +273,7 @@ const RUN_EVENTS_PAGE_SIZE = 200;
 const NAV_ITEMS: { key: NavSection; label: string; detail: string }[] = [
   { key: "overview", label: "Overview", detail: "Temporal operations dashboard" },
   { key: "jobs", label: "Jobs", detail: "Definitions, schedules, structure" },
+  { key: "queues", label: "Queues", detail: "Ingress, item status, asset metadata" },
   { key: "runs", label: "Runs", detail: "Historical and active executions" },
 ];
 const OVERVIEW_WINDOWS = [1, 6, 12, 24] as const;
@@ -191,6 +299,7 @@ type RunsSort = "newest" | "oldest" | "duration_desc";
 type RunStepGroupKey = "preparing" | "executing" | "failed" | "succeeded" | "not_executed";
 type EventStreamFilter = "all" | "stdout" | "stderr";
 type JobDetailTab = "overview" | "runs";
+type QueueDetailTab = "items" | "partitions";
 type ThemeMode = "dark" | "light";
 
 const THEME_STORAGE_KEY = "daggo.theme";
@@ -262,6 +371,8 @@ function parseRoute(pathname: string): AppRoute {
       section: "overview",
       path: "/",
       jobKey: "",
+      queueKey: "",
+      queueItemID: 0,
       runKey: "",
     };
   }
@@ -274,6 +385,8 @@ function parseRoute(pathname: string): AppRoute {
         section: "jobs",
         path: `/jobs/${encodeURIComponent(decodedJobKey)}`,
         jobKey: decodedJobKey,
+        queueKey: "",
+        queueItemID: 0,
         runKey: "",
       };
     }
@@ -283,6 +396,49 @@ function parseRoute(pathname: string): AppRoute {
       section: "jobs",
       path: "/jobs",
       jobKey: "",
+      queueKey: "",
+      queueItemID: 0,
+      runKey: "",
+    };
+  }
+
+  const queueItemMatch = normalized.match(/^\/queues\/([^/]+)\/items\/([^/]+)$/);
+  if (queueItemMatch) {
+    const decodedQueueKey = decodePathSegment(queueItemMatch[1]);
+    const queueItemID = Number.parseInt(decodePathSegment(queueItemMatch[2]), 10);
+    if (decodedQueueKey && Number.isFinite(queueItemID) && queueItemID > 0) {
+      return {
+        section: "queues",
+        path: `/queues/${encodeURIComponent(decodedQueueKey)}/items/${queueItemID}`,
+        jobKey: "",
+        queueKey: decodedQueueKey,
+        queueItemID,
+        runKey: "",
+      };
+    }
+  }
+
+  const queueMatch = normalized.match(/^\/queues\/([^/]+)$/);
+  if (queueMatch) {
+    const decodedQueueKey = decodePathSegment(queueMatch[1]);
+    if (decodedQueueKey) {
+      return {
+        section: "queues",
+        path: `/queues/${encodeURIComponent(decodedQueueKey)}`,
+        jobKey: "",
+        queueKey: decodedQueueKey,
+        queueItemID: 0,
+        runKey: "",
+      };
+    }
+  }
+  if (normalized === "/queues") {
+    return {
+      section: "queues",
+      path: "/queues",
+      jobKey: "",
+      queueKey: "",
+      queueItemID: 0,
       runKey: "",
     };
   }
@@ -295,6 +451,8 @@ function parseRoute(pathname: string): AppRoute {
         section: "runs",
         path: `/runs/${encodeURIComponent(decodedRunKey)}`,
         jobKey: "",
+        queueKey: "",
+        queueItemID: 0,
         runKey: decodedRunKey,
       };
     }
@@ -304,6 +462,8 @@ function parseRoute(pathname: string): AppRoute {
       section: "runs",
       path: "/runs",
       jobKey: "",
+      queueKey: "",
+      queueItemID: 0,
       runKey: "",
     };
   }
@@ -312,6 +472,8 @@ function parseRoute(pathname: string): AppRoute {
     section: "overview",
     path: "/",
     jobKey: "",
+    queueKey: "",
+    queueItemID: 0,
     runKey: "",
   };
 }
@@ -328,22 +490,38 @@ export function App() {
   const api = useMemo(() => createClient(window.location.origin), []);
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
   const [themeMode, setThemeMode] = useState<ThemeMode>(INITIAL_THEME_MODE);
+  const [daggoVersion, setDaggoVersion] = useState("");
 
   const [activeSection, setActiveSection] = useState<NavSection>(initialRoute.section);
   const [jobsPage, setJobsPage] = useState<"list" | "detail">(
     initialRoute.section === "jobs" && initialRoute.jobKey.length > 0 ? "detail" : "list",
   );
+  const [queuesPage, setQueuesPage] = useState<"list" | "detail">(
+    initialRoute.section === "queues" && initialRoute.queueKey.length > 0 ? "detail" : "list",
+  );
   const [runsPage, setRunsPage] = useState<"list" | "detail">(
     initialRoute.section === "runs" && initialRoute.runKey.length > 0 ? "detail" : "list",
   );
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [queues, setQueues] = useState<QueueSummary[]>([]);
   const [allRuns, setAllRuns] = useState<RunSummary[]>([]);
   const [scheduleRows, setScheduleRows] = useState<SchedulesResponse["data"]>([]);
   const [routeJobKey, setRouteJobKey] = useState<string>(initialRoute.section === "jobs" ? initialRoute.jobKey : "");
+  const [routeQueueKey, setRouteQueueKey] = useState<string>(initialRoute.section === "queues" ? initialRoute.queueKey : "");
+  const [routeQueueItemID, setRouteQueueItemID] = useState<number>(
+    initialRoute.section === "queues" ? initialRoute.queueItemID : 0,
+  );
   const [routeRunKey, setRouteRunKey] = useState<string>(initialRoute.section === "runs" ? initialRoute.runKey : "");
 
   const [selectedJobKey, setSelectedJobKey] = useState<string>("");
+  const [selectedQueueKey, setSelectedQueueKey] = useState<string>("");
+  const [selectedQueueItemID, setSelectedQueueItemID] = useState<number>(0);
   const [selectedRunID, setSelectedRunID] = useState<number>(0);
+  const [queueItems, setQueueItems] = useState<QueueItemSummary[]>([]);
+  const [queueItemsTotal, setQueueItemsTotal] = useState(0);
+  const [queuePartitions, setQueuePartitions] = useState<QueuePartitionSummary[]>([]);
+  const [queuePartitionsTotal, setQueuePartitionsTotal] = useState(0);
+  const [queueItemDetail, setQueueItemDetail] = useState<{ item: QueueItemDetail; runs: QueueLinkedRun[] } | null>(null);
   const [runDetail, setRunDetail] = useState<{ summary: RunSummary; steps: RunStep[] } | null>(null);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [runEventsTotal, setRunEventsTotal] = useState(0);
@@ -380,6 +558,7 @@ export function App() {
   const [runsSort, setRunsSort] = useState<RunsSort>("newest");
   const [runsPageIndex, setRunsPageIndex] = useState(0);
   const [jobsQuery, setJobsQuery] = useState("");
+  const [queuesQuery, setQueuesQuery] = useState("");
   const runHealthPopoverRef = useRef<HTMLButtonElement | null>(null);
   const runHealthPopoverShowTimerRef = useRef<number | null>(null);
   const runHealthPopoverHideTimerRef = useRef<number | null>(null);
@@ -390,6 +569,7 @@ export function App() {
   const [runStepGroupFilter, setRunStepGroupFilter] = useState<RunStepGroupKey | "all">("all");
   const [collapsedRunGroups, setCollapsedRunGroups] = useState<RunStepGroupKey[]>([]);
   const [jobDetailTab, setJobDetailTab] = useState<JobDetailTab>("overview");
+  const [queueDetailTab, setQueueDetailTab] = useState<QueueDetailTab>("items");
 
   const [runEventLevelFilter, setRunEventLevelFilter] = useState("all");
   const [runEventStreamFilter, setRunEventStreamFilter] = useState<EventStreamFilter>("all");
@@ -399,6 +579,37 @@ export function App() {
 
   const sortedRuns = useMemo(() => sortRunsByFreshness(allRuns), [allRuns]);
   const selectedJob = jobs.find((job) => job.job_key === selectedJobKey) ?? null;
+  const selectedQueue = queues.find((queue) => queue.queue_key === selectedQueueKey) ?? null;
+  const queuesQueryText = queuesQuery.trim().toLowerCase();
+  const queuesForList = useMemo(() => {
+    const sorted = [...queues].sort((left, right) => {
+      const leftLabel = left.display_name || left.queue_key;
+      const rightLabel = right.display_name || right.queue_key;
+      return leftLabel.localeCompare(rightLabel);
+    });
+    if (!queuesQueryText) {
+      return sorted;
+    }
+    return sorted.filter((queue) => {
+      const jobsText = (queue.jobs ?? []).map((job) => `${job.display_name} ${job.job_key}`).join(" ");
+      const haystack = `${queue.display_name} ${queue.queue_key} ${queue.description} ${queue.route_path} ${jobsText}`.toLowerCase();
+      return haystack.includes(queuesQueryText);
+    });
+  }, [queues, queuesQueryText]);
+  const queueStats = useMemo(() => {
+    return queues.reduce(
+      (totals, queue) => {
+        totals.items += queue.item_count ?? 0;
+        totals.partitions += queue.partition_count ?? 0;
+        totals.queued += queue.queued_count ?? 0;
+        totals.running += queue.running_count ?? 0;
+        totals.complete += queue.complete_count ?? 0;
+        totals.failed += queue.failed_count ?? 0;
+        return totals;
+      },
+      { items: 0, partitions: 0, queued: 0, running: 0, complete: 0, failed: 0 },
+    );
+  }, [queues]);
   const scheduleRowsByJob = useMemo(() => {
     const byJob: Record<string, ScheduleRow[]> = {};
     for (const schedule of scheduleRows ?? []) {
@@ -987,24 +1198,50 @@ export function App() {
     setActiveSection(route.section);
     if (route.section === "overview") {
       setJobsPage("list");
+      setQueuesPage("list");
       setRunsPage("list");
       setRouteJobKey("");
+      setRouteQueueKey("");
+      setRouteQueueItemID(0);
       setRouteRunKey("");
+      setSelectedQueueItemID(0);
       setSelectedRunID(0);
       return;
     }
     if (route.section === "jobs") {
       setJobsPage(route.jobKey.length > 0 ? "detail" : "list");
+      setQueuesPage("list");
       setRunsPage("list");
       setRouteJobKey(route.jobKey);
+      setRouteQueueKey("");
+      setRouteQueueItemID(0);
+      setRouteRunKey("");
+      setSelectedQueueItemID(0);
+      setSelectedRunID(0);
+      return;
+    }
+    if (route.section === "queues") {
+      setQueuesPage(route.queueKey.length > 0 ? "detail" : "list");
+      setJobsPage("list");
+      setRunsPage("list");
+      setRouteQueueKey(route.queueKey);
+      setRouteQueueItemID(route.queueItemID);
+      setRouteJobKey("");
       setRouteRunKey("");
       setSelectedRunID(0);
+      if (route.queueItemID <= 0) {
+        setSelectedQueueItemID(0);
+      }
       return;
     }
     setRunsPage(route.runKey.length > 0 ? "detail" : "list");
     setJobsPage("list");
+    setQueuesPage("list");
     setRouteRunKey(route.runKey);
     setRouteJobKey("");
+    setRouteQueueKey("");
+    setRouteQueueItemID(0);
+    setSelectedQueueItemID(0);
     setSelectedRunID(0);
   }, []);
 
@@ -1037,7 +1274,7 @@ export function App() {
     };
     window.addEventListener("popstate", onPopState);
     void (async () => {
-      await Promise.all([refreshJobs(), refreshSchedules(), refreshAllRuns()]);
+      await Promise.all([refreshSystemInfo(), refreshJobs(), refreshSchedules(), refreshAllRuns(), refreshQueues()]);
       if (!active) {
         return;
       }
@@ -1077,9 +1314,16 @@ export function App() {
         return;
       }
       autoRefreshInFlightRef.current = true;
-      void refreshAllRuns()
+      void Promise.all([
+        refreshAllRuns(),
+        activeSection === "queues"
+          ? queuesPage === "detail"
+            ? refreshQueueView(selectedQueueKey, selectedQueueItemID)
+            : refreshQueues()
+          : Promise.resolve(),
+      ])
         .catch(() => {
-          // refreshAllRuns already captures and surfaces errors.
+          // Refresh helpers already capture and surface errors.
         })
         .finally(() => {
           autoRefreshInFlightRef.current = false;
@@ -1087,7 +1331,7 @@ export function App() {
         });
     }, delayMs);
     return () => window.clearTimeout(timer);
-  }, [nextAutoRefreshAtMs]);
+  }, [activeSection, nextAutoRefreshAtMs, queuesPage, selectedQueueItemID, selectedQueueKey]);
 
   useEffect(() => {
     if (!overviewFollowNow) {
@@ -1239,6 +1483,33 @@ export function App() {
   }, [jobs, navigatePath, routeJobKey, selectedJobKey]);
 
   useEffect(() => {
+    if (activeSection !== "queues") {
+      return;
+    }
+    if (!routeQueueKey) {
+      setSelectedQueueItemID(0);
+      return;
+    }
+    const matched = queues.find((queue) => queue.queue_key === routeQueueKey);
+    if (matched) {
+      if (selectedQueueKey !== matched.queue_key) {
+        setSelectedQueueKey(matched.queue_key);
+      }
+      if (routeQueueItemID > 0 && selectedQueueItemID !== routeQueueItemID) {
+        setSelectedQueueItemID(routeQueueItemID);
+      }
+      if (routeQueueItemID <= 0 && selectedQueueItemID !== 0) {
+        setSelectedQueueItemID(0);
+      }
+      return;
+    }
+    if (queues.length > 0) {
+      setError(`Queue ${routeQueueKey} was not found`);
+      navigatePath("/queues", { replace: true });
+    }
+  }, [activeSection, navigatePath, queues, routeQueueItemID, routeQueueKey, selectedQueueItemID, selectedQueueKey]);
+
+  useEffect(() => {
     if (!routeRunKey) {
       return;
     }
@@ -1254,6 +1525,36 @@ export function App() {
       navigatePath("/runs", { replace: true });
     }
   }, [allRuns, navigatePath, routeRunKey, selectedRunID]);
+
+  useEffect(() => {
+    if (activeSection !== "queues" || queuesPage !== "detail" || !selectedQueueKey) {
+      setQueueItems([]);
+      setQueueItemsTotal(0);
+      setQueuePartitions([]);
+      setQueuePartitionsTotal(0);
+      if (activeSection !== "queues" || !selectedQueueItemID) {
+        setQueueItemDetail(null);
+      }
+      return;
+    }
+    let active = true;
+    void Promise.all([refreshQueueItems(selectedQueueKey), refreshQueuePartitions(selectedQueueKey)]).then(() => {
+      if (!active) {
+        return;
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [activeSection, queuesPage, selectedQueueKey]);
+
+  useEffect(() => {
+    if (activeSection !== "queues" || selectedQueueItemID <= 0) {
+      setQueueItemDetail(null);
+      return;
+    }
+    void refreshQueueItemDetail(selectedQueueItemID);
+  }, [activeSection, selectedQueueItemID]);
 
   useEffect(() => {
     if (!runDetail?.summary.job_key) {
@@ -1317,6 +1618,10 @@ export function App() {
   useEffect(() => {
     setJobDetailTab("overview");
   }, [selectedJobKey]);
+
+  useEffect(() => {
+    setQueueDetailTab("items");
+  }, [selectedQueueKey]);
 
   useEffect(() => {
     const valid = new Set(filteredRunEvents.map((event) => event.id));
@@ -1388,6 +1693,38 @@ export function App() {
     }
   }
 
+  async function refreshSystemInfo() {
+    try {
+      const response = (await api.system.InfoGet()) as SystemInfoResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      setDaggoVersion(response.version ?? "");
+    } catch {
+      setDaggoVersion("");
+    }
+  }
+
+  async function refreshQueues() {
+    try {
+      setError("");
+      const response = (await api.queues.QueuesGetMany({ limit: 300, offset: 0 })) as QueuesGetManyResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const nextQueues = response.data ?? [];
+      setQueues(nextQueues);
+      if (!selectedQueueKey && nextQueues.length > 0) {
+        setSelectedQueueKey(nextQueues[0].queue_key);
+      }
+      if (selectedQueueKey && !nextQueues.some((queue) => queue.queue_key === selectedQueueKey)) {
+        setSelectedQueueKey(nextQueues[0]?.queue_key ?? "");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load queues");
+    }
+  }
+
   async function refreshSchedules() {
     try {
       const response = (await api.schedules.SchedulesGetMany({ limit: 300, offset: 0 })) as SchedulesResponse;
@@ -1410,6 +1747,96 @@ export function App() {
       setAllRuns(response.data ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load runs");
+    }
+  }
+
+  async function refreshQueueItems(queueKey: string) {
+    if (!queueKey) {
+      setQueueItems([]);
+      setQueueItemsTotal(0);
+      return;
+    }
+    try {
+      setError("");
+      const response = (await api.queues.QueueItemsGetMany({
+        queue_key: queueKey,
+        limit: 200,
+        offset: 0,
+      })) as QueueItemsGetManyResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const rows = response.data ?? [];
+      setQueueItems(rows);
+      setQueueItemsTotal(response.total ?? rows.length);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load queue items");
+      setQueueItems([]);
+      setQueueItemsTotal(0);
+    }
+  }
+
+  async function refreshQueuePartitions(queueKey: string) {
+    if (!queueKey) {
+      setQueuePartitions([]);
+      setQueuePartitionsTotal(0);
+      return;
+    }
+    try {
+      setError("");
+      const response = (await api.queues.QueuePartitionsGetMany({
+        queue_key: queueKey,
+        limit: 200,
+        offset: 0,
+      })) as QueuePartitionsGetManyResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const rows = response.data ?? [];
+      setQueuePartitions(rows);
+      setQueuePartitionsTotal(response.total ?? rows.length);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load queue partitions");
+      setQueuePartitions([]);
+      setQueuePartitionsTotal(0);
+    }
+  }
+
+  async function refreshQueueItemDetail(queueItemID: number) {
+    if (queueItemID <= 0) {
+      setQueueItemDetail(null);
+      return;
+    }
+    try {
+      setError("");
+      const response = (await api.queues.QueueItemByID({ id: queueItemID })) as QueueItemByIDResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      if (!response.item) {
+        throw new Error("Queue item detail is unavailable");
+      }
+      setQueueItemDetail({
+        item: response.item,
+        runs: response.runs ?? [],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load queue item detail");
+      setQueueItemDetail(null);
+      if (selectedQueueKey) {
+        navigatePath(`/queues/${encodeURIComponent(selectedQueueKey)}`, { replace: true });
+      }
+    }
+  }
+
+  async function refreshQueueView(queueKey = selectedQueueKey, queueItemID = selectedQueueItemID) {
+    await refreshQueues();
+    if (!queueKey) {
+      return;
+    }
+    await Promise.all([refreshQueueItems(queueKey), refreshQueuePartitions(queueKey)]);
+    if (queueItemID > 0) {
+      await refreshQueueItemDetail(queueItemID);
     }
   }
 
@@ -1570,6 +1997,27 @@ export function App() {
     navigatePath(`/jobs/${encodeURIComponent(job.job_key)}`);
   }
 
+  function openQueueDetail(queueKey: string) {
+    const queue = queues.find((entry) => entry.queue_key === queueKey);
+    if (!queue) {
+      navigatePath("/queues");
+      return;
+    }
+    setSelectedQueueKey(queue.queue_key);
+    setSelectedQueueItemID(0);
+    navigatePath(`/queues/${encodeURIComponent(queue.queue_key)}`);
+  }
+
+  function openQueueItem(queueKey: string, queueItemID: number) {
+    if (!queueKey || queueItemID <= 0) {
+      openQueueDetail(queueKey);
+      return;
+    }
+    setSelectedQueueKey(queueKey);
+    setSelectedQueueItemID(queueItemID);
+    navigatePath(`/queues/${encodeURIComponent(queueKey)}/items/${queueItemID}`);
+  }
+
   function shiftOverviewWindow(direction: -1 | 1) {
     setOverviewFollowNow(false);
     const delta = Math.floor(overviewWindowMs / 2);
@@ -1596,7 +2044,12 @@ export function App() {
     setRefreshControlBusy(true);
     autoRefreshInFlightRef.current = true;
     try {
-      await Promise.all([refreshJobs(), refreshSchedules(), refreshAllRuns()]);
+      await Promise.all([
+        refreshJobs(),
+        refreshSchedules(),
+        refreshAllRuns(),
+        queuesPage === "detail" ? refreshQueueView(selectedQueueKey, selectedQueueItemID) : refreshQueues(),
+      ]);
     } finally {
       autoRefreshInFlightRef.current = false;
       setRefreshControlBusy(false);
@@ -1624,6 +2077,14 @@ export function App() {
     }));
   }, [scheduleRows, selectedJob]);
   const selectedJobHasSchedules = selectedJobSchedules.length > 0;
+  const selectedQueueJobs = selectedQueue?.jobs ?? [];
+  const selectedQueueMetadataEntries = useMemo(
+    () =>
+      Object.entries(queueItemDetail?.item.metadata ?? {}).sort(([left], [right]) =>
+        (jobLabelByKey[left] ?? left).localeCompare(jobLabelByKey[right] ?? right),
+      ),
+    [jobLabelByKey, queueItemDetail],
+  );
 
   return (
     <div className="app-shell">
@@ -1659,6 +2120,7 @@ export function App() {
           <a href="/rpc/docs/" target="_blank" rel="noreferrer">
             RPC Docs
           </a>
+          <div className="sidebar-version">{daggoVersion ? `DAGGO ${daggoVersion}` : "DAGGO version unavailable"}</div>
         </div>
       </aside>
 
@@ -1671,7 +2133,9 @@ export function App() {
                 ? "Temporal execution density and live system pulse"
                 : activeSection === "jobs"
                   ? "Structural inventory of executable units and schedules"
-                  : "Run-centric history, filtering, and step-level diagnostics"}
+                  : activeSection === "queues"
+                    ? "Ingress visibility, queue item state, and asset-oriented detail"
+                    : "Run-centric history, filtering, and step-level diagnostics"}
             </p>
           </div>
           <div className="content-topbar-controls">
@@ -2346,6 +2810,437 @@ export function App() {
                           </div>
                         </section>
                       )}
+                    </>
+                  )}
+                </section>
+              )}
+            </div>
+          ) : null}
+
+          {activeSection === "queues" ? (
+            <div className="queues-page-shell">
+              {queuesPage === "list" ? (
+                <section className="panel queues-panel">
+                  <div className="panel-head queues-head">
+                    <h3>Queues</h3>
+                    <span className="muted">
+                      {queuesForList.length} shown / {queues.length} total
+                    </span>
+                  </div>
+
+                  <div className="queue-summary-grid">
+                    <article className="stat-card">
+                      <strong>{queueStats.items}</strong>
+                      <span>Total items</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{queueStats.partitions}</strong>
+                      <span>Active partitions</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{queueStats.queued}</strong>
+                      <span>Queued / not started</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{queueStats.running}</strong>
+                      <span>In progress</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{queueStats.complete}</strong>
+                      <span>Complete</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{queueStats.failed}</strong>
+                      <span>Failed</span>
+                    </article>
+                  </div>
+
+                  <div className="jobs-table-controls queue-list-controls">
+                    <label className="jobs-search-field">
+                      <span>Search</span>
+                      <input
+                        value={queuesQuery}
+                        onChange={(event) => setQueuesQuery(event.target.value)}
+                        placeholder="Filter by queue, route, or attached job"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="queues-table-wrap">
+                    <table className="queues-table">
+                      <thead>
+                        <tr>
+                          <th>Queue</th>
+                          <th>Route</th>
+                          <th>Jobs</th>
+                          <th>Items</th>
+                          <th>Partitions</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queuesForList.map((queue) => (
+                          <tr key={queue.queue_key} className="queues-row" onClick={() => openQueueDetail(queue.queue_key)}>
+                            <td className="queues-cell-queue">
+                              <button
+                                type="button"
+                                className="job-link-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openQueueDetail(queue.queue_key);
+                                }}
+                              >
+                                {queue.display_name || queue.queue_key}
+                              </button>
+                              <small>{queue.queue_key}</small>
+                              {queue.description ? <p>{queue.description}</p> : null}
+                            </td>
+                            <td className="queues-cell-route">
+                              <span>{queue.route_path || "No route mounted"}</span>
+                              <small>{formatQueueLoadMode(queue.load_mode, queue.load_poll_every_seconds)}</small>
+                            </td>
+                            <td className="queues-cell-jobs">
+                              {(queue.jobs ?? []).map((job) => job.display_name || job.job_key).join(", ") || "No jobs attached"}
+                            </td>
+                            <td>{queue.item_count}</td>
+                            <td>{queue.partition_count}</td>
+                            <td>
+                              <div className="queue-state-cluster">
+                                <span className={`pill ${queueStatusTone("queued")}`}>Q {queue.queued_count}</span>
+                                <span className={`pill ${queueStatusTone("running")}`}>R {queue.running_count}</span>
+                                <span className={`pill ${queueStatusTone("complete")}`}>C {queue.complete_count}</span>
+                                <span className={`pill ${queueStatusTone("failed")}`}>F {queue.failed_count}</span>
+                              </div>
+                            </td>
+                            <td className="queues-cell-actions">
+                              <button
+                                type="button"
+                                className="ghost-btn tiny"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openQueueDetail(queue.queue_key);
+                                }}
+                              >
+                                Inspect
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {queuesForList.length === 0 ? (
+                          <tr>
+                            <td className="queues-empty-row" colSpan={7}>
+                              No queues match the current filter.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : (
+                <section className="panel queue-detail-page">
+                  {!selectedQueue ? (
+                    <p className="muted">Select a queue from the list to inspect items and partitions.</p>
+                  ) : (
+                    <>
+                      <div className="panel-head detail-top">
+                        <div className="job-detail-tabs" role="tablist" aria-label="Queue detail tabs">
+                          <button
+                            role="tab"
+                            aria-selected={queueDetailTab === "items"}
+                            className={`job-detail-tab ${queueDetailTab === "items" ? "active" : ""}`}
+                            onClick={() => setQueueDetailTab("items")}
+                          >
+                            Items
+                          </button>
+                          <button
+                            role="tab"
+                            aria-selected={queueDetailTab === "partitions"}
+                            className={`job-detail-tab ${queueDetailTab === "partitions" ? "active" : ""}`}
+                            onClick={() => setQueueDetailTab("partitions")}
+                          >
+                            Partitions
+                          </button>
+                        </div>
+                        <button className="ghost-btn tiny" onClick={() => navigatePath("/queues")}>
+                          Back to Queues
+                        </button>
+                      </div>
+
+                      <header className="queue-detail-header">
+                        <div className="queue-header-primary">
+                          <strong>{selectedQueue.display_name || selectedQueue.queue_key}</strong>
+                          <code className="queue-key-chip">{selectedQueue.queue_key}</code>
+                          <span className="pill neutral">{formatQueueLoadMode(selectedQueue.load_mode, selectedQueue.load_poll_every_seconds)}</span>
+                        </div>
+                        <p className="job-description-chip">{selectedQueue.description || "No queue description."}</p>
+                        <div className="queue-header-chips">
+                          <div className="job-header-chip">
+                            <span>Route</span>
+                            <strong>{selectedQueue.route_path || "No route"}</strong>
+                          </div>
+                          <div className="job-header-chip">
+                            <span>Jobs</span>
+                            <strong>{selectedQueueJobs.length}</strong>
+                          </div>
+                          <div className="job-header-chip">
+                            <span>Items</span>
+                            <strong>{selectedQueue.item_count}</strong>
+                          </div>
+                          <div className="job-header-chip">
+                            <span>Partitions</span>
+                            <strong>{selectedQueue.partition_count}</strong>
+                          </div>
+                        </div>
+                      </header>
+
+                      <div className="queue-summary-grid queue-detail-summary">
+                        <article className="stat-card">
+                          <strong>{selectedQueue.queued_count}</strong>
+                          <span>Queued / not started</span>
+                        </article>
+                        <article className="stat-card">
+                          <strong>{selectedQueue.running_count}</strong>
+                          <span>In progress</span>
+                        </article>
+                        <article className="stat-card">
+                          <strong>{selectedQueue.complete_count}</strong>
+                          <span>Complete</span>
+                        </article>
+                        <article className="stat-card">
+                          <strong>{selectedQueue.failed_count}</strong>
+                          <span>Failed</span>
+                        </article>
+                      </div>
+
+                      <div className="queue-detail-layout">
+                        <section className="queue-detail-main">
+                          {queueDetailTab === "items" ? (
+                            <>
+                              <div className="panel-head compact">
+                                <h4>Recent Queue Items</h4>
+                                <span className="muted">
+                                  {queueItems.length} loaded / {queueItemsTotal} total
+                                </span>
+                              </div>
+                              <div className="queues-table-wrap queue-detail-table-wrap">
+                                <table className="queues-table queue-items-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Item</th>
+                                      <th>Partition</th>
+                                      <th>Status</th>
+                                      <th>Queued</th>
+                                      <th>Completed</th>
+                                      <th>Error</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {queueItems.map((item) => (
+                                      <tr
+                                        key={item.id}
+                                        className={`queues-row ${queueItemDetail?.item.id === item.id ? "active" : ""}`}
+                                        onClick={() => openQueueItem(selectedQueue.queue_key, item.id)}
+                                      >
+                                        <td className="queues-cell-item">
+                                          <strong>{item.queue_item_key}</strong>
+                                          <small>{item.external_key || "No external key"}</small>
+                                        </td>
+                                        <td>{item.partition_key}</td>
+                                        <td>
+                                          <span className={`run-status-badge ${queueStatusTone(item.status)}`}>
+                                            {queueStatusLabel(item.status)}
+                                          </span>
+                                        </td>
+                                        <td>{formatTs(item.queued_at)}</td>
+                                        <td>{formatTs(item.completed_at)}</td>
+                                        <td className="queues-cell-error">{item.error_message || "-"}</td>
+                                      </tr>
+                                    ))}
+                                    {queueItems.length === 0 ? (
+                                      <tr>
+                                        <td className="queues-empty-row" colSpan={6}>
+                                          No queue items have been recorded yet.
+                                        </td>
+                                      </tr>
+                                    ) : null}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="panel-head compact">
+                                <h4>Latest Partition State</h4>
+                                <span className="muted">
+                                  {queuePartitions.length} loaded / {queuePartitionsTotal} total
+                                </span>
+                              </div>
+                              <div className="queues-table-wrap queue-detail-table-wrap">
+                                <table className="queues-table queue-items-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Partition</th>
+                                      <th>Latest Item</th>
+                                      <th>Status</th>
+                                      <th>Queued</th>
+                                      <th>Completed</th>
+                                      <th>Actions</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {queuePartitions.map((partition) => (
+                                      <tr key={partition.partition_key} className="queues-row">
+                                        <td>{partition.partition_key}</td>
+                                        <td className="queues-cell-item">
+                                          <strong>{partition.queue_item_key}</strong>
+                                          <small>{partition.external_key || "No external key"}</small>
+                                        </td>
+                                        <td>
+                                          <span className={`run-status-badge ${queueStatusTone(partition.status)}`}>
+                                            {queueStatusLabel(partition.status)}
+                                          </span>
+                                        </td>
+                                        <td>{formatTs(partition.queued_at)}</td>
+                                        <td>{formatTs(partition.completed_at)}</td>
+                                        <td className="queues-cell-actions">
+                                          <button
+                                            type="button"
+                                            className="ghost-btn tiny"
+                                            onClick={() => openQueueItem(selectedQueue.queue_key, partition.latest_queue_item_id)}
+                                          >
+                                            Open Item
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {queuePartitions.length === 0 ? (
+                                      <tr>
+                                        <td className="queues-empty-row" colSpan={6}>
+                                          No partition state has been recorded yet.
+                                        </td>
+                                      </tr>
+                                    ) : null}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>
+                          )}
+                        </section>
+
+                        <aside className="queue-detail-sidebar">
+                          {!queueItemDetail ? (
+                            <div className="queue-item-empty">
+                              <h4>Queue Item Detail</h4>
+                              <p className="muted">Select an item to inspect payload, linked runs, and collected metadata.</p>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="panel-head compact">
+                                <h4>{queueItemDetail.item.queue_item_key}</h4>
+                                <span className={`pill ${queueStatusTone(queueItemDetail.item.status)}`}>
+                                  {queueStatusLabel(queueItemDetail.item.status)}
+                                </span>
+                              </div>
+
+                              {queueItemDetail.item.error_message ? (
+                                <div className="alert queue-item-alert">{queueItemDetail.item.error_message}</div>
+                              ) : null}
+
+                              <div className="queue-fact-grid">
+                                <div className="queue-fact">
+                                  <span>Partition</span>
+                                  <strong>{queueItemDetail.item.partition_key}</strong>
+                                </div>
+                                <div className="queue-fact">
+                                  <span>External Key</span>
+                                  <strong>{queueItemDetail.item.external_key || "-"}</strong>
+                                </div>
+                                <div className="queue-fact">
+                                  <span>Queued</span>
+                                  <strong>{formatTs(queueItemDetail.item.queued_at)}</strong>
+                                </div>
+                                <div className="queue-fact">
+                                  <span>Started</span>
+                                  <strong>{formatTs(queueItemDetail.item.started_at)}</strong>
+                                </div>
+                                <div className="queue-fact">
+                                  <span>Completed</span>
+                                  <strong>{formatTs(queueItemDetail.item.completed_at)}</strong>
+                                </div>
+                                <div className="queue-fact">
+                                  <span>Queue</span>
+                                  <strong>{queueItemDetail.item.queue_display_name || queueItemDetail.item.queue_key}</strong>
+                                </div>
+                              </div>
+
+                              <section className="queue-detail-block">
+                                <div className="panel-head compact">
+                                  <h4>Linked Runs</h4>
+                                  <span className="muted">{queueItemDetail.runs.length} total</span>
+                                </div>
+                                <div className="queue-linked-runs">
+                                  {queueItemDetail.runs.map((run) => (
+                                    <button key={run.id} type="button" className="queue-linked-run" onClick={() => openRun(run.run_key)}>
+                                      <div>
+                                        <strong>{run.job_display_name || jobLabelByKey[run.job_key] || run.job_key}</strong>
+                                        <small>{run.run_key}</small>
+                                      </div>
+                                      <div className="queue-linked-run-meta">
+                                        <span className={`run-status-badge ${normalizeStatus(run.status)}`}>
+                                          {runStatusLabel(run.status)}
+                                        </span>
+                                        <small>{formatTs(run.started_at || run.queued_at || run.completed_at)}</small>
+                                      </div>
+                                    </button>
+                                  ))}
+                                  {queueItemDetail.runs.length === 0 ? (
+                                    <p className="muted">No runs are linked to this queue item.</p>
+                                  ) : null}
+                                </div>
+                              </section>
+
+                              <section className="queue-detail-block">
+                                <div className="panel-head compact">
+                                  <h4>Payload</h4>
+                                </div>
+                                <pre className="queue-code-block">{formatJSONText(queueItemDetail.item.payload_json)}</pre>
+                              </section>
+
+                              <section className="queue-detail-block">
+                                <div className="panel-head compact">
+                                  <h4>Metadata</h4>
+                                </div>
+                                {selectedQueueMetadataEntries.length === 0 ? (
+                                  <p className="muted">No step metadata has been published for this item.</p>
+                                ) : (
+                                  <div className="queue-metadata-groups">
+                                    {selectedQueueMetadataEntries.map(([jobKey, stepEntries]) => (
+                                      <section key={jobKey} className="queue-metadata-group">
+                                        <div className="panel-head compact">
+                                          <h4>{jobLabelByKey[jobKey] ?? jobKey}</h4>
+                                          <span className="run-job-chip">{jobKey}</span>
+                                        </div>
+                                        {Object.entries(stepEntries ?? {})
+                                          .sort(([left], [right]) => left.localeCompare(right))
+                                          .map(([stepKey, value]) => (
+                                            <article key={stepKey} className="queue-metadata-card">
+                                              <div className="queue-metadata-card-head">
+                                                <strong>{stepKey}</strong>
+                                              </div>
+                                              <pre className="queue-code-block">{formatJSONValue(value)}</pre>
+                                            </article>
+                                          ))}
+                                      </section>
+                                    ))}
+                                  </div>
+                                )}
+                              </section>
+                            </>
+                          )}
+                        </aside>
+                      </div>
                     </>
                   )}
                 </section>
@@ -3049,6 +3944,66 @@ function runStatusIcon(status: string): string {
   return "•";
 }
 
+function normalizeQueueStatus(status: string): "queued" | "running" | "complete" | "failed" | "pending" {
+  const normalized = (status || "").trim().toLowerCase();
+  if (normalized === "complete" || normalized === "completed" || normalized === "success") {
+    return "complete";
+  }
+  if (normalized === "failed" || normalized === "canceled" || normalized === "cancelled") {
+    return "failed";
+  }
+  if (normalized === "running" || normalized === "in_progress") {
+    return "running";
+  }
+  if (normalized === "queued" || normalized === "not_started" || normalized === "todo") {
+    return "queued";
+  }
+  return "pending";
+}
+
+function queueStatusTone(status: string): "success" | "failed" | "running" | "queued" | "pending" {
+  const normalized = normalizeQueueStatus(status);
+  if (normalized === "complete") {
+    return "success";
+  }
+  if (normalized === "failed") {
+    return "failed";
+  }
+  if (normalized === "running") {
+    return "running";
+  }
+  if (normalized === "queued") {
+    return "queued";
+  }
+  return "pending";
+}
+
+function queueStatusLabel(status: string): string {
+  switch (normalizeQueueStatus(status)) {
+    case "complete":
+      return "Complete";
+    case "failed":
+      return "Failed";
+    case "running":
+      return "In Progress";
+    case "queued":
+      return "Queued";
+    default:
+      return "Not Started";
+  }
+}
+
+function formatQueueLoadMode(mode: string, pollEverySeconds: number): string {
+  const normalized = (mode || "").trim().toLowerCase();
+  if (normalized === "stream") {
+    return "stream loader";
+  }
+  if (pollEverySeconds > 0) {
+    return `poll every ${pollEverySeconds}s`;
+  }
+  return normalized ? `${normalized} loader` : "loader";
+}
+
 function shortRunKey(runKey: string): string {
   const key = (runKey || "").trim();
   if (!key) {
@@ -3198,6 +4153,32 @@ function formatRunEventDataJSON(raw: string): string {
     .replace(/\\r\\n/g, "\n")
     .replace(/\\n/g, "\n")
     .replace(/\\t/g, "\t");
+}
+
+function formatJSONText(raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) {
+    return "{}";
+  }
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return trimmed;
+  }
+}
+
+function formatJSONValue(value: any): string {
+  if (value === null || value === undefined) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return formatJSONText(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function formatRefreshCountdown(milliseconds: number): string {

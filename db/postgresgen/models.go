@@ -40,6 +40,61 @@ type JobNode struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+type Queue struct {
+	ID                   int64     `json:"id"`
+	QueueKey             string    `json:"queue_key"`
+	DisplayName          string    `json:"display_name"`
+	Description          string    `json:"description"`
+	RoutePath            string    `json:"route_path"`
+	LoadMode             string    `json:"load_mode"`
+	LoadPollEverySeconds int64     `json:"load_poll_every_seconds"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type QueueItem struct {
+	ID           int64           `json:"id"`
+	QueueID      int64           `json:"queue_id"`
+	QueueItemKey string          `json:"queue_item_key"`
+	PartitionKey string          `json:"partition_key"`
+	Status       string          `json:"status"`
+	ExternalKey  string          `json:"external_key"`
+	PayloadJson  json.RawMessage `json:"payload_json"`
+	ErrorMessage string          `json:"error_message"`
+	QueuedAt     time.Time       `json:"queued_at"`
+	StartedAt    sql.NullTime    `json:"started_at"`
+	CompletedAt  sql.NullTime    `json:"completed_at"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type QueueItemRun struct {
+	ID          int64     `json:"id"`
+	QueueItemID int64     `json:"queue_item_id"`
+	JobID       int64     `json:"job_id"`
+	RunID       int64     `json:"run_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type QueueItemStepMetadatum struct {
+	ID           int64           `json:"id"`
+	QueueItemID  int64           `json:"queue_item_id"`
+	JobID        int64           `json:"job_id"`
+	RunID        int64           `json:"run_id"`
+	StepKey      string          `json:"step_key"`
+	MetadataJson json.RawMessage `json:"metadata_json"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type QueueJob struct {
+	ID        int64     `json:"id"`
+	QueueID   int64     `json:"queue_id"`
+	JobID     int64     `json:"job_id"`
+	SortIndex int64     `json:"sort_index"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Run struct {
 	ID           int64           `json:"id"`
 	RunKey       string          `json:"run_key"`

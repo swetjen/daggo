@@ -36,6 +36,7 @@ func TestStartupBannerIncludesConnectionHints(t *testing.T) {
 	banner := startupBanner(DefaultConfig(), ":8000")
 	for _, snippet := range []string{
 		"[DAGGO]",
+		"Version:  " + Version(),
 		"UI:       http://localhost:8000/",
 		"RPC docs: http://localhost:8000/rpc/docs",
 	} {
@@ -60,5 +61,8 @@ func TestStartupBannerOmitsUIWhenDisabled(t *testing.T) {
 	}
 	if !strings.Contains(banner, "RPC docs: http://localhost:8000/rpc/docs") {
 		t.Fatalf("startup banner missing docs hint, got %q", banner)
+	}
+	if !strings.Contains(banner, "Version:  "+Version()) {
+		t.Fatalf("startup banner missing version, got %q", banner)
 	}
 }

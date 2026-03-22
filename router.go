@@ -13,6 +13,7 @@ import (
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/daggo/handlers"
 	"github.com/swetjen/daggo/middleware"
+	"github.com/swetjen/daggo/queue"
 	"github.com/swetjen/virtuous/httpapi"
 	"github.com/swetjen/virtuous/rpc"
 )
@@ -34,18 +35,22 @@ func NewRouterWithRegistry(cfg config.Config, queries db.Store, pool *sql.DB, re
 }
 
 func NewRouterWithDeps(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB) (http.Handler, *deps.Deps, error) {
-	return NewRouterWithDepsAndRegistry(ctx, cfg, queries, pool, nil)
+	return NewRouterWithDepsAndDefinitions(ctx, cfg, queries, pool, nil, nil)
 }
 
 func NewRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (http.Handler, *deps.Deps, error) {
-	rpcRouter, application, err := BuildRouterWithDepsAndRegistry(ctx, cfg, queries, pool, registry)
+	return NewRouterWithDepsAndDefinitions(ctx, cfg, queries, pool, registry, nil)
+}
+
+func NewRouterWithDepsAndDefinitions(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry, queues *queue.Registry) (http.Handler, *deps.Deps, error) {
+	rpcRouter, application, err := BuildRouterWithDepsAndDefinitions(ctx, cfg, queries, pool, registry, queues)
 	if err != nil {
 		return nil, nil, err
 	}
-	return newHandler(cfg, rpcRouter), application, nil
+	return newHandler(cfg, rpcRouter, application), application, nil
 }
 
-func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
+func newHandler(cfg config.Config, rpcRouter *rpc.Router, application *deps.Deps) http.Handler {
 	cfg = cfg.Normalized()
 	mux := http.NewServeMux()
 	guardedRPC := guardRPCHandler(cfg, rpcRouter)
@@ -67,6 +72,14 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router) http.Handler {
 		guardedRPC.ServeHTTP(w, req)
 	}))
 	mux.Handle("/rpc/", guardedRPC)
+	if application != nil && application.Queues != nil {
+		for _, definition := range application.Queues.Queues() {
+			if strings.TrimSpace(definition.RoutePath) == "" || definition.RouteHandler() == nil {
+				continue
+			}
+			mux.Handle(definition.RoutePath, definition.RouteHandler())
+		}
+	}
 	if !cfg.DisableUI {
 		mux.Handle("/", embedAndServeReact())
 	}
@@ -96,19 +109,24 @@ func BuildRouterWithRegistry(cfg config.Config, queries db.Store, pool *sql.DB, 
 }
 
 func BuildRouterWithDeps(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB) (*rpc.Router, *deps.Deps, error) {
-	return BuildRouterWithDepsAndRegistry(ctx, cfg, queries, pool, nil)
+	return BuildRouterWithDepsAndDefinitions(ctx, cfg, queries, pool, nil, nil)
 }
 
 func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry) (*rpc.Router, *deps.Deps, error) {
+	return BuildRouterWithDepsAndDefinitions(ctx, cfg, queries, pool, registry, nil)
+}
+
+func BuildRouterWithDepsAndDefinitions(ctx context.Context, cfg config.Config, queries db.Store, pool *sql.DB, registry *dag.Registry, queues *queue.Registry) (*rpc.Router, *deps.Deps, error) {
 	slog.Info("daggo: building rpc router", "prefix", "/rpc")
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	cfg = cfg.Normalized()
-	application, err := deps.NewWithRegistry(ctx, cfg, queries, pool, registry)
+	application, err := deps.NewWithDefinitions(ctx, cfg, queries, pool, registry, queues)
 	if err != nil {
 		return nil, nil, err
 	}
+	application.Version = Version()
 	handlerSet := handlers.New(application)
 	routeGuard := rpcRouteGuard(cfg)
 
@@ -116,6 +134,12 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 	handleRPC(router, handlerSet.Jobs.JobsGetMany, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobByKey, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobSchedulingUpdate, routeGuard)
+
+	handleRPC(router, handlerSet.Queues.QueuesGetMany, routeGuard)
+	handleRPC(router, handlerSet.Queues.QueueByKey, routeGuard)
+	handleRPC(router, handlerSet.Queues.QueueItemsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Queues.QueuePartitionsGetMany, routeGuard)
+	handleRPC(router, handlerSet.Queues.QueueItemByID, routeGuard)
 
 	handleRPC(router, handlerSet.Runs.RunCreate, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunRerunStepCreate, routeGuard)
@@ -125,6 +149,7 @@ func BuildRouterWithDepsAndRegistry(ctx context.Context, cfg config.Config, quer
 	handleRPC(router, handlerSet.Runs.RunTerminate, routeGuard)
 
 	handleRPC(router, handlerSet.Schedules.SchedulesGetMany, routeGuard)
+	handleRPC(router, handlerSet.System.InfoGet, routeGuard)
 
 	router.ServeDocs()
 	slog.Info("daggo: router ready", "status", "all clear")

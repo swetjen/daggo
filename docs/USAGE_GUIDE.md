@@ -6,8 +6,9 @@ This guide covers the package-level runtime flow for importing DAGGO into anothe
 
 1. Define typed steps with `dag.Op[I, O]`.
 2. Build a job with `dag.NewJob(...).Add(...).MustBuild()`.
-3. Start from `daggo.DefaultConfig()`.
-4. Launch DAGGO with `daggo.Run(...)` or open it with `daggo.Open(...)`.
+3. Optionally build queues with `daggo.NewQueue[T](...)`.
+4. Start from `daggo.DefaultConfig()`.
+5. Launch DAGGO with `daggo.Run(...)` for jobs only, or `daggo.RunDefinitions(...)` / `daggo.OpenDefinitions(...)` when queues are involved.
 
 ## Minimal Startup
 
@@ -35,6 +36,49 @@ if err := daggo.Run(context.Background(), cfg, job); err != nil {
 Current schedules are taken from the jobs registered in memory at startup. DAGGO persists scheduler runtime state and run history, not future schedule definitions.
 
 If you do not want the UI exposed, set `cfg.DisableUI = true`. DAGGO will still serve `/rpc/` and `/rpc/docs/`.
+
+## Queues
+
+Queues are the canonical way to let DAGGO orchestrate external work without taking ownership of your underlying queue storage.
+
+A queue definition includes:
+
+- one or more attached jobs
+- a loader that emits normalized queue items into DAGGO
+- a partition resolver for each queue item
+- an optional route, usually implemented with Virtuous, that stages work into your own queue store
+
+```go
+type ImportEnvelope struct {
+	CustomerID string `json:"customer_id"`
+	BatchID    string `json:"batch_id"`
+}
+
+importQueue := daggo.NewQueue[ImportEnvelope]("customer_imports").
+	WithRoute("/queues/customer-imports", myVirtuousHandler).
+	WithLoader(loadQueuedImports, daggo.QueueLoaderOptions{
+		Mode:      daggo.QueueLoadModePoll,
+		PollEvery: 2 * time.Second,
+	}).
+	WithPartitionKey(func(item ImportEnvelope) (string, error) {
+		return item.CustomerID, nil
+	}).
+	AddJobs(importJob, auditJob).
+	MustBuild()
+
+if err := daggo.RunDefinitions(context.Background(), cfg, importQueue); err != nil {
+	log.Fatal(err)
+}
+```
+
+Queue-attached jobs are unordered fan-out peers. For each accepted queue item, DAGGO creates one run per attached job, persists queue item state, and exposes queue items plus partitions in the admin UI.
+
+Use these helpers in step code when the current run came from a queue:
+
+- `daggo.QueueMetaFromContext(ctx)`
+- `daggo.QueuePayloadFromContext[T](ctx)`
+
+Successful step outputs may publish metadata into the queue item detail page by implementing `daggo.MetadataProvider`.
 
 ## Runner Model
 

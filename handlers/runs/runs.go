@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swetjen/daggo/dag"
 	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/virtuous/rpc"
@@ -383,14 +384,6 @@ type createRunInput struct {
 }
 
 func (h *Handlers) createRunWithSteps(ctx context.Context, in createRunInput) (RunSummary, error) {
-	nodes, err := h.app.DB.JobNodeGetManyByJobID(ctx, in.JobID)
-	if err != nil {
-		return RunSummary{}, fmt.Errorf("failed to load job nodes: %w", err)
-	}
-	if len(nodes) == 0 {
-		return RunSummary{}, errors.New("job has no nodes")
-	}
-
 	tx, err := h.app.Pool.BeginTx(ctx, nil)
 	if err != nil {
 		return RunSummary{}, err
@@ -398,58 +391,15 @@ func (h *Handlers) createRunWithSteps(ctx context.Context, in createRunInput) (R
 	qtx := db.WithTx(h.app.DB, tx)
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	runKey := fmt.Sprintf("run_%d", time.Now().UTC().UnixNano())
-
-	run, err := qtx.RunCreate(ctx, db.RunCreateParams{
-		RunKey:       runKey,
+	run, pendingSteps, err := dag.InsertQueuedRun(ctx, qtx, dag.RunInsertInput{
 		JobID:        in.JobID,
-		Status:       "queued",
-		TriggeredBy:  nonEmpty(in.TriggeredBy, "manual"),
-		ParamsJson:   nonEmpty(in.ParamsJSON, "{}"),
+		TriggeredBy:  in.TriggeredBy,
+		ParamsJSON:   in.ParamsJSON,
 		QueuedAt:     now,
-		StartedAt:    "",
-		CompletedAt:  "",
 		ParentRunID:  in.ParentRunID,
 		RerunStepKey: in.RerunStepKey,
-		ErrorMessage: "",
 	})
 	if err != nil {
-		_ = tx.Rollback()
-		return RunSummary{}, err
-	}
-
-	for _, node := range nodes {
-		if _, err := qtx.RunStepCreate(ctx, db.RunStepCreateParams{
-			RunID:        run.ID,
-			JobNodeID:    node.ID,
-			StepKey:      node.StepKey,
-			Status:       "pending",
-			Attempt:      1,
-			StartedAt:    "",
-			CompletedAt:  "",
-			DurationMs:   0,
-			OutputJson:   "{}",
-			ErrorMessage: "",
-			LogExcerpt:   "",
-		}); err != nil {
-			_ = tx.Rollback()
-			return RunSummary{}, err
-		}
-	}
-
-	payloadBytes, _ := json.Marshal(map[string]any{
-		"triggered_by":   run.TriggeredBy,
-		"parent_run_id":  run.ParentRunID,
-		"rerun_step_key": run.RerunStepKey,
-	})
-	if _, err := qtx.RunEventCreate(ctx, db.RunEventCreateParams{
-		RunID:         run.ID,
-		StepKey:       "",
-		EventType:     "run_queued",
-		Level:         "info",
-		Message:       "run queued",
-		EventDataJson: string(payloadBytes),
-	}); err != nil {
 		_ = tx.Rollback()
 		return RunSummary{}, err
 	}
@@ -478,7 +428,7 @@ func (h *Handlers) createRunWithSteps(ctx context.Context, in createRunInput) (R
 		ParentRunID:  run.ParentRunID,
 		RerunStepKey: run.RerunStepKey,
 		ErrorMessage: run.ErrorMessage,
-		PendingSteps: int64(len(nodes)),
+		PendingSteps: int64(pendingSteps),
 	}, nil
 }
 

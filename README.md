@@ -11,7 +11,7 @@ DAGGO is a Go-native workflow orchestrator for teams that want to define jobs in
 
 ## Admin UI
 
-The embedded UI is intended to be usable immediately in an imported app: overview timeline, job graph, and run history in one place.
+The embedded UI is intended to be usable immediately in an imported app: overview timeline, job graph, queues, and run history in one place.
 
 ![DAGGO overview timeline](docs/images/overview.png)
 
@@ -26,6 +26,7 @@ The runs view gives a run-centric history with filtering and drill-in diagnostic
 ## What You Get
 
 - Typed DAG authoring with build-time validation.
+- First-class queues with loader-driven ingestion and queue-item visibility.
 - Sqlite by default with Postgres also supported.
 - Embedded web admin UI served by the same Go process.
 - RPC API with generated client support.
@@ -145,7 +146,47 @@ func (o *MyOps) AnalyzeTextOp(ctx context.Context, in AnalyzeTextInput) (Analyze
 }
 ```
 
-See [examples/content_ingestion/main.go](examples/content_ingestion/main.go), [examples/content_ingestion/jobs/content_ingestion.go](examples/content_ingestion/jobs/content_ingestion.go), [examples/content_ingestion/ops/content_ops.go](examples/content_ingestion/ops/content_ops.go), and [examples/content_ingestion/resources/deps.go](examples/content_ingestion/resources/deps.go) for the full example.
+## Queues
+
+Queues let DAGGO orchestrate work pulled from user-owned storage or ingress. A queue definition attaches one or more jobs, a loader, and a partition resolver. Routes are optional, but when you expose one it should be implemented with Virtuous and push work into your own queue store.
+
+```go
+type ImportEnvelope struct {
+	CustomerID string `json:"customer_id"`
+	BatchID    string `json:"batch_id"`
+}
+
+func main() {
+	cfg := daggo.DefaultConfig()
+	cfg.Admin.Port = "8080"
+	cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
+
+	importJob := jobs.CustomerImportJob(myOps)
+	auditJob := jobs.CustomerImportAuditJob(myOps)
+
+	importQueue := daggo.NewQueue[ImportEnvelope]("customer_imports").
+		WithRoute("/queues/customer-imports", myVirtuousHandler).
+		WithLoader(loadQueuedImports, daggo.QueueLoaderOptions{
+			Mode:      daggo.QueueLoadModePoll,
+			PollEvery: 2 * time.Second,
+		}).
+		WithPartitionKey(func(item ImportEnvelope) (string, error) {
+			return item.CustomerID, nil
+		}).
+		AddJobs(importJob, auditJob).
+		MustBuild()
+
+	if err := daggo.RunDefinitions(context.Background(), cfg, importQueue); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Queue-attached jobs are unordered fan-out peers. DAGGO creates one run per attached job for each accepted queue item, rolls queue-item status up from those linked runs, and shows queue items plus partitions as top-level UI views.
+
+Successful step outputs may publish queue item metadata by implementing `daggo.MetadataProvider`, and step code can read queue context with `daggo.QueueMetaFromContext(ctx)` or `daggo.QueuePayloadFromContext[T](ctx)`.
+
+See [examples/content_ingestion/main.go](examples/content_ingestion/main.go), [examples/content_ingestion/jobs/content_ingestion.go](examples/content_ingestion/jobs/content_ingestion.go), [examples/content_ingestion/ops/content_ops.go](examples/content_ingestion/ops/content_ops.go), and [examples/content_ingestion/resources/deps.go](examples/content_ingestion/resources/deps.go) for the job-centric example. For a minimal queue runtime example, see [examples/queue_ingestion/main.go](examples/queue_ingestion/main.go).
 
 ## Startup Flow
 
@@ -159,6 +200,8 @@ Calling `daggo.Run(...)` gives new users a working runtime immediately:
 6. Handles DAGGO's internal worker subprocess command inside the same application binary.
 
 Current schedules are derived from the jobs you register at startup. DAGGO does not persist future schedule definitions in the database; it persists scheduler bookkeeping and historical runs.
+
+If you start with `daggo.RunDefinitions(...)` or `daggo.OpenDefinitions(...)`, DAGGO also syncs queue definitions, mounts queue routes, and starts queue loaders alongside the existing job runtime.
 
 If you only want the RPC surface, set `cfg.DisableUI = true`. DAGGO will continue serving `/rpc/` and `/rpc/docs/`, while `/` will no longer expose the admin UI.
 

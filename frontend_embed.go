@@ -1,11 +1,15 @@
 package daggo
 
 import (
+	"bytes"
 	"embed"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
+	"time"
 )
 
 // Embed frontend source root; when dist exists it is included and served.
@@ -22,15 +26,9 @@ func embedAndServeReact() http.Handler {
 	}
 	assetSub, assetErr := fs.Sub(frontendAssets, "frontend-web/src/assets")
 	indexBody, indexErr := fs.ReadFile(webSub, "index.html")
-
-	fileServer := http.FileServer(http.FS(webSub))
-	assetFileServer := http.Handler(nil)
-	if assetErr == nil {
-		assetFileServer = http.StripPrefix("/assets/", http.FileServer(http.FS(assetSub)))
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
-			if assetFileServer == nil {
+			if assetErr != nil {
 				http.NotFound(w, r)
 				return
 			}
@@ -41,7 +39,7 @@ func embedAndServeReact() http.Handler {
 			}
 			if f, err := assetSub.Open(assetPath); err == nil {
 				_ = f.Close()
-				assetFileServer.ServeHTTP(w, r)
+				serveEmbeddedFile(w, r, assetSub, assetPath)
 				return
 			}
 			http.NotFound(w, r)
@@ -54,7 +52,7 @@ func embedAndServeReact() http.Handler {
 		}
 		if f, err := webSub.Open(path); err == nil {
 			_ = f.Close()
-			fileServer.ServeHTTP(w, r)
+			serveEmbeddedFile(w, r, webSub, path)
 			return
 		}
 		if indexErr == nil {
@@ -65,6 +63,18 @@ func embedAndServeReact() http.Handler {
 		}
 		http.NotFound(w, r)
 	})
+}
+
+func serveEmbeddedFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) {
+	data, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
 }
 
 func hasEmbeddedFile(fsys fs.FS, name string) bool {

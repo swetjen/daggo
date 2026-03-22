@@ -410,6 +410,7 @@ func (e *Executor) markRunCanceled(ctx context.Context, runID int64, reason stri
 	_ = e.addEvent(ctx, runID, "", "run_canceled", "warn", "run canceled", map[string]any{
 		"reason": message,
 	})
+	_ = SyncLinkedQueueItemStatus(ctx, e.queries, runID)
 	return nil
 }
 
@@ -549,6 +550,11 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 	if strings.TrimSpace(run.ParamsJson) != "" {
 		_ = json.Unmarshal([]byte(run.ParamsJson), &params)
 	}
+	queueMeta, err := queueMetaFromParams(params)
+	if err != nil {
+		_ = e.failRun(ctx, run.ID, fmt.Sprintf("invalid queue params: %v", err))
+		return err
+	}
 
 	outputs := map[string]json.RawMessage{}
 	if run.ParentRunID > 0 {
@@ -569,11 +575,12 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 	}); err != nil {
 		return err
 	}
+	_ = SyncLinkedQueueItemStatus(ctx, e.queries, run.ID)
 	_ = e.addEvent(ctx, run.ID, "", "run_started", "info", "run started", map[string]any{"run_id": run.ID})
 
 	maxConcurrentSteps := e.RunMaxConcurrentSteps()
 	captureGlobalLogs := e.RunMaxConcurrentRuns() <= 1 && maxConcurrentSteps <= 1
-	hadFailure, failureMessage := e.executeRunSteps(ctx, run, job, order, stepRows, outputs, params, maxConcurrentSteps, captureGlobalLogs)
+	hadFailure, failureMessage := e.executeRunSteps(ctx, run, job, order, stepRows, outputs, params, queueMeta, maxConcurrentSteps, captureGlobalLogs)
 
 	status := "success"
 	if hadFailure {
@@ -593,6 +600,7 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 	}); err != nil {
 		return err
 	}
+	_ = SyncLinkedQueueItemStatus(ctx, e.queries, run.ID)
 	_ = e.addEvent(ctx, run.ID, "", "run_completed", "info", "run completed", map[string]any{"status": status})
 	return nil
 }
@@ -612,6 +620,7 @@ func (e *Executor) executeRunSteps(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	queueMeta *RunQueueMeta,
 	maxConcurrentSteps int,
 	captureGlobalLogs bool,
 ) (bool, string) {
@@ -622,9 +631,9 @@ func (e *Executor) executeRunSteps(
 	}
 
 	if run.RerunStepKey != "" || maxConcurrentSteps <= 1 || len(order) <= 1 {
-		return e.executeRunStepsSerial(ctx, run, job, order, stepRows, outputs, params, captureGlobalLogs)
+		return e.executeRunStepsSerial(ctx, run, job, order, stepRows, outputs, params, queueMeta, captureGlobalLogs)
 	}
-	return e.executeRunStepsConcurrent(ctx, run, job, order, stepRows, outputs, params, maxConcurrentSteps)
+	return e.executeRunStepsConcurrent(ctx, run, job, order, stepRows, outputs, params, queueMeta, maxConcurrentSteps)
 }
 
 func (e *Executor) executeRunStepsSerial(
@@ -635,6 +644,7 @@ func (e *Executor) executeRunStepsSerial(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	queueMeta *RunQueueMeta,
 	captureGlobalLogs bool,
 ) (bool, string) {
 	hadFailure := false
@@ -683,7 +693,7 @@ func (e *Executor) executeRunStepsSerial(
 			continue
 		}
 
-		result := e.executeSingleStep(ctx, run.ID, job.Key, stepDef, stepRow.Attempt, params, outputs, captureGlobalLogs)
+		result := e.executeSingleStep(ctx, run.ID, run.JobID, job.Key, stepDef, stepRow.Attempt, params, outputs, queueMeta, captureGlobalLogs)
 		stepRow.Status = result.status
 		stepRow.ErrorMessage = result.errorMessage
 		if result.status == "success" {
@@ -711,6 +721,7 @@ func (e *Executor) executeRunStepsConcurrent(
 	stepRows map[string]db.RunStep,
 	outputs map[string]json.RawMessage,
 	params map[string]any,
+	queueMeta *RunQueueMeta,
 	maxConcurrentSteps int,
 ) (bool, string) {
 	stepByKey := make(map[string]StepDefinition, len(order))
@@ -769,7 +780,7 @@ func (e *Executor) executeRunStepsConcurrent(
 			for stepKey := range workQueue {
 				stepDef := stepByKey[stepKey]
 				snapshot := cloneOutputs(outputs, &outputsMu)
-				results <- e.executeSingleStep(ctx, run.ID, job.Key, stepDef, attemptByKey[stepKey], params, snapshot, false)
+				results <- e.executeSingleStep(ctx, run.ID, run.JobID, job.Key, stepDef, attemptByKey[stepKey], params, snapshot, queueMeta, false)
 			}
 		}()
 	}
@@ -883,11 +894,13 @@ func (e *Executor) executeRunStepsConcurrent(
 func (e *Executor) executeSingleStep(
 	ctx context.Context,
 	runID int64,
+	jobID int64,
 	jobKey string,
 	stepDef StepDefinition,
 	stepAttempt int64,
 	params map[string]any,
 	outputs map[string]json.RawMessage,
+	queueMeta *RunQueueMeta,
 	captureGlobalLogs bool,
 ) stepExecutionResult {
 	result := stepExecutionResult{
@@ -947,6 +960,7 @@ func (e *Executor) executeSingleStep(
 		StepKey: stepDef.Key,
 		Attempt: stepAttempt,
 		Params:  copyParams(params),
+		Queue:   cloneQueueMeta(queueMeta),
 	})
 	stepCtx = WithLogger(stepCtx, stepLogger)
 
@@ -1030,6 +1044,9 @@ func (e *Executor) executeSingleStep(
 		RunID:        runID,
 		StepKey:      stepDef.Key,
 	})
+	if metadata := metadataFromOutputValue(outputValue); len(metadata) > 0 {
+		_ = RecordQueueStepMetadata(ctx, e.queries, queueMeta, jobID, runID, stepDef.Key, metadata)
+	}
 	_ = e.addEvent(ctx, runID, stepDef.Key, "step_succeeded", "info", "step succeeded", map[string]any{"duration_ms": durationMs})
 	result.status = "success"
 	result.output = payload
@@ -1133,6 +1150,29 @@ func copyParams(params map[string]any) map[string]any {
 	return out
 }
 
+func cloneQueueMeta(meta *RunQueueMeta) *RunQueueMeta {
+	if meta == nil {
+		return nil
+	}
+	cloned := *meta
+	return &cloned
+}
+
+func metadataFromOutputValue(outputValue reflect.Value) map[string]any {
+	if !outputValue.IsValid() {
+		return nil
+	}
+	if provider, ok := outputValue.Interface().(MetadataProvider); ok {
+		return provider.DaggoMetadata()
+	}
+	if outputValue.CanAddr() {
+		if provider, ok := outputValue.Addr().Interface().(MetadataProvider); ok {
+			return provider.DaggoMetadata()
+		}
+	}
+	return nil
+}
+
 func (e *Executor) failRun(ctx context.Context, runID int64, message string) error {
 	run, err := e.queries.RunGetByID(ctx, runID)
 	if err == nil && isTerminalExecutionStatus(run.Status) {
@@ -1145,6 +1185,7 @@ func (e *Executor) failRun(ctx context.Context, runID int64, message string) err
 		ID:           runID,
 	})
 	_ = e.addEvent(ctx, runID, "", "run_failed", "error", message, map[string]any{})
+	_ = SyncLinkedQueueItemStatus(ctx, e.queries, runID)
 	return err
 }
 

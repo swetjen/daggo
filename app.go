@@ -19,6 +19,7 @@ import (
 	"github.com/swetjen/daggo/dag"
 	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
+	"github.com/swetjen/daggo/queue"
 )
 
 const (
@@ -30,6 +31,7 @@ type App struct {
 	runtime  context.Context
 	cancel   context.CancelFunc
 	registry *dag.Registry
+	queues   *queue.Registry
 	queries  db.Store
 	pool     *sql.DB
 	handler  http.Handler
@@ -45,7 +47,7 @@ func Run(ctx context.Context, cfg Config, jobs ...dag.JobDefinition) error {
 	if err != nil {
 		return err
 	}
-	return runWithRegistry(ctx, cfg, registry)
+	return runWithDefinitions(ctx, cfg, registry, nil)
 }
 
 func RunRegistry(ctx context.Context, cfg Config, registry *dag.Registry) error {
@@ -53,10 +55,10 @@ func RunRegistry(ctx context.Context, cfg Config, registry *dag.Registry) error 
 	if err != nil {
 		return err
 	}
-	return runWithRegistry(ctx, cfg, cloned)
+	return runWithDefinitions(ctx, cfg, cloned, nil)
 }
 
-func runWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) error {
+func runWithDefinitions(ctx context.Context, cfg Config, registry *dag.Registry, queues *queue.Registry) error {
 	cfg = cfg.Normalized()
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -70,7 +72,7 @@ func runWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) er
 		return runWorker(ctx, cfg, registry, runID)
 	}
 
-	app, err := openWithRegistry(ctx, cfg, registry)
+	app, err := openWithDefinitions(ctx, cfg, registry, queues)
 	if err != nil {
 		return err
 	}
@@ -87,7 +89,7 @@ func Open(ctx context.Context, cfg Config, jobs ...dag.JobDefinition) (*App, err
 	if err != nil {
 		return nil, err
 	}
-	return openWithRegistry(ctx, cfg, registry)
+	return openWithDefinitions(ctx, cfg, registry, nil)
 }
 
 func OpenRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (*App, error) {
@@ -95,10 +97,10 @@ func OpenRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (*App
 	if err != nil {
 		return nil, err
 	}
-	return openWithRegistry(ctx, cfg, cloned)
+	return openWithDefinitions(ctx, cfg, cloned, nil)
 }
 
-func openWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (*App, error) {
+func openWithDefinitions(ctx context.Context, cfg Config, registry *dag.Registry, queues *queue.Registry) (*App, error) {
 	cfg = cfg.Normalized()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -114,7 +116,7 @@ func openWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (
 		return nil, err
 	}
 
-	handler, application, err := NewRouterWithDepsAndRegistry(runtimeCtx, cfg, queries, pool, registry)
+	handler, application, err := NewRouterWithDepsAndDefinitions(runtimeCtx, cfg, queries, pool, registry, queues)
 	if err != nil {
 		cancel()
 		_ = pool.Close()
@@ -126,6 +128,7 @@ func openWithRegistry(ctx context.Context, cfg Config, registry *dag.Registry) (
 		runtime:  runtimeCtx,
 		cancel:   cancel,
 		registry: registry,
+		queues:   queues,
 		queries:  queries,
 		pool:     pool,
 		handler:  handler,
@@ -165,6 +168,13 @@ func (a *App) Registry() *dag.Registry {
 		return nil
 	}
 	return a.registry
+}
+
+func (a *App) QueueRegistry() *queue.Registry {
+	if a == nil {
+		return nil
+	}
+	return a.queues
 }
 
 func (a *App) Deps() *deps.Deps {
@@ -247,6 +257,19 @@ func cloneRegistry(source *dag.Registry) (*dag.Registry, error) {
 	}
 	for _, job := range source.Jobs() {
 		if err := registry.Register(job); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
+}
+
+func cloneQueueRegistry(source *queue.Registry) (*queue.Registry, error) {
+	registry := queue.NewRegistry()
+	if source == nil {
+		return registry, nil
+	}
+	for _, definition := range source.Queues() {
+		if err := registry.Register(definition); err != nil {
 			return nil, err
 		}
 	}
@@ -350,14 +373,17 @@ func shutdownServer(server *http.Server, cancel context.CancelFunc) {
 
 func startupBanner(cfg config.Config, addr string) string {
 	baseURL := consoleBaseURL(addr)
+	version := Version()
 	if cfg.Normalized().DisableUI {
 		return fmt.Sprintf(
-			"\n[DAGGO]\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
+			"\n[DAGGO]\nVersion:  %s\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
+			version,
 			baseURL,
 		)
 	}
 	return fmt.Sprintf(
-		"\n[DAGGO]\nUI:       %s/\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
+		"\n[DAGGO]\nVersion:  %s\nUI:       %s/\nRPC docs: %s/rpc/docs\nPress Ctrl+C to stop.\n\n",
+		version,
 		baseURL,
 		baseURL,
 	)

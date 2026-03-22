@@ -315,59 +315,20 @@ func (s *Scheduler) createScheduledRun(
 		"scheduler_key": s.schedulerKey,
 	})
 	now := s.nowFn().UTC().Format(time.RFC3339Nano)
-	runKey := fmt.Sprintf("run_%d", s.nowFn().UTC().UnixNano())
-	run, err := qtx.RunCreate(ctx, db.RunCreateParams{
-		RunKey:       runKey,
-		JobID:        schedule.JobID,
-		Status:       "queued",
-		TriggeredBy:  triggeredBy,
-		ParamsJson:   string(paramsBytes),
-		QueuedAt:     now,
-		StartedAt:    "",
-		CompletedAt:  "",
-		ParentRunID:  0,
-		RerunStepKey: "",
-		ErrorMessage: "",
+	run, _, err := InsertQueuedRun(ctx, qtx, RunInsertInput{
+		JobID:       schedule.JobID,
+		TriggeredBy: triggeredBy,
+		ParamsJSON:  string(paramsBytes),
+		QueuedAt:    now,
+		EventPayload: map[string]any{
+			"triggered_by":   triggeredBy,
+			"parent_run_id":  0,
+			"rerun_step_key": "",
+			"schedule_key":   schedule.ScheduleKey,
+			"scheduled_for":  scheduledFor.UTC().Format(time.RFC3339Nano),
+		},
 	})
 	if err != nil {
-		_ = tx.Rollback()
-		return db.Run{}, err
-	}
-
-	for _, node := range nodes {
-		if _, err := qtx.RunStepCreate(ctx, db.RunStepCreateParams{
-			RunID:        run.ID,
-			JobNodeID:    node.ID,
-			StepKey:      node.StepKey,
-			Status:       "pending",
-			Attempt:      1,
-			StartedAt:    "",
-			CompletedAt:  "",
-			DurationMs:   0,
-			OutputJson:   "{}",
-			ErrorMessage: "",
-			LogExcerpt:   "",
-		}); err != nil {
-			_ = tx.Rollback()
-			return db.Run{}, err
-		}
-	}
-
-	eventBytes, _ := json.Marshal(map[string]any{
-		"triggered_by":   run.TriggeredBy,
-		"parent_run_id":  run.ParentRunID,
-		"rerun_step_key": run.RerunStepKey,
-		"schedule_key":   schedule.ScheduleKey,
-		"scheduled_for":  scheduledFor.UTC().Format(time.RFC3339Nano),
-	})
-	if _, err := qtx.RunEventCreate(ctx, db.RunEventCreateParams{
-		RunID:         run.ID,
-		StepKey:       "",
-		EventType:     "run_queued",
-		Level:         "info",
-		Message:       "run queued",
-		EventDataJson: string(eventBytes),
-	}); err != nil {
 		_ = tx.Rollback()
 		return db.Run{}, err
 	}

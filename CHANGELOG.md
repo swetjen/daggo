@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.0 - 2026-03-22
+- Added a canonical root `VERSION` file and surfaced the running DAGGO version in the admin UI footer, runtime RPC info, and startup banner.
+- Added version sync checks so release tags, the Go module release version, `VERSION`, the frontend package version, and new changelog entries stay aligned.
+
 ## 2026-03-07
 - Added light mode with a top-level theme toggle, persistent user preference, and first-load system theme detection while preserving existing dark mode layout/density.
 - Redesigned the Jobs list into a denser operational table with aligned columns, inline enable/disable switches, and simplified row actions.
