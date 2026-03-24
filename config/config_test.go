@@ -47,6 +47,74 @@ func TestLoadDoesNotEnablePostgresWithoutExplicitDriver(t *testing.T) {
 	}
 }
 
+func TestLoadUsesPostgresForPostgresDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://daggo:secret@db.internal:5432/platform?sslmode=disable")
+
+	cfg := Load()
+
+	if cfg.Database.Driver != DatabaseDriverPostgres {
+		t.Fatalf("expected postgres driver, got %q", cfg.Database.Driver)
+	}
+	if cfg.Database.Postgres.Host != "db.internal" {
+		t.Fatalf("expected postgres host from database url, got %q", cfg.Database.Postgres.Host)
+	}
+	if cfg.Database.Postgres.Port != 5432 {
+		t.Fatalf("expected postgres port 5432, got %d", cfg.Database.Postgres.Port)
+	}
+	if cfg.Database.Postgres.User != "daggo" {
+		t.Fatalf("expected postgres user from database url, got %q", cfg.Database.Postgres.User)
+	}
+	if cfg.Database.Postgres.Password != "secret" {
+		t.Fatalf("expected postgres password from database url, got %q", cfg.Database.Postgres.Password)
+	}
+	if cfg.Database.Postgres.Database != "platform" {
+		t.Fatalf("expected postgres database from database url, got %q", cfg.Database.Postgres.Database)
+	}
+	if cfg.Database.Postgres.Schema != "daggo" {
+		t.Fatalf("expected default postgres schema, got %q", cfg.Database.Postgres.Schema)
+	}
+	if cfg.Database.Postgres.SSLMode != "disable" {
+		t.Fatalf("expected postgres sslmode from database url, got %q", cfg.Database.Postgres.SSLMode)
+	}
+}
+
+func TestLoadUsesPGFallbacksWhenPostgresSelected(t *testing.T) {
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("PG_HOST", "db.internal")
+	t.Setenv("PG_PORT", "5432")
+	t.Setenv("PG_USER", "daggo")
+	t.Setenv("PG_PASS", "secret")
+	t.Setenv("PG_DB", "platform")
+	t.Setenv("PG_SSLMODE", "disable")
+
+	cfg := Load()
+
+	if cfg.Database.Driver != DatabaseDriverPostgres {
+		t.Fatalf("expected postgres driver, got %q", cfg.Database.Driver)
+	}
+	if cfg.Database.Postgres.Host != "db.internal" {
+		t.Fatalf("expected postgres host from PG_HOST, got %q", cfg.Database.Postgres.Host)
+	}
+	if cfg.Database.Postgres.Port != 5432 {
+		t.Fatalf("expected postgres port 5432, got %d", cfg.Database.Postgres.Port)
+	}
+	if cfg.Database.Postgres.User != "daggo" {
+		t.Fatalf("expected postgres user from PG_USER, got %q", cfg.Database.Postgres.User)
+	}
+	if cfg.Database.Postgres.Password != "secret" {
+		t.Fatalf("expected postgres password from PG_PASS, got %q", cfg.Database.Postgres.Password)
+	}
+	if cfg.Database.Postgres.Database != "platform" {
+		t.Fatalf("expected postgres database from PG_DB, got %q", cfg.Database.Postgres.Database)
+	}
+	if cfg.Database.Postgres.Schema != "daggo" {
+		t.Fatalf("expected default postgres schema, got %q", cfg.Database.Postgres.Schema)
+	}
+	if cfg.Database.Postgres.SSLMode != "disable" {
+		t.Fatalf("expected postgres sslmode from PG_SSLMODE, got %q", cfg.Database.Postgres.SSLMode)
+	}
+}
+
 func TestLoadCanDisableUI(t *testing.T) {
 	t.Setenv("DAGGO_DISABLE_UI", "true")
 

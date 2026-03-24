@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -117,12 +118,17 @@ func Load() Config {
 	cfg.DisableUI = getEnvBoolAny([]string{"DAGGO_DISABLE_UI"}, cfg.DisableUI)
 	cfg.AllowedOrigins = splitEnvListAny([]string{"DAGGO_ALLOWED_ORIGINS", "CORS_ALLOW_ORIGINS"}, cfg.AllowedOrigins)
 
+	databaseURL := getEnvAny([]string{"DATABASE_URL"}, "")
 	sqlitePath := getEnvAny([]string{"DAGGO_SQLITE_PATH"}, "")
-	sqliteDSN := getEnvAny([]string{"DAGGO_SQLITE_DSN", "DATABASE_URL"}, "")
+	sqliteDSN := getEnvAny([]string{"DAGGO_SQLITE_DSN"}, "")
 	driver := strings.ToLower(strings.TrimSpace(getEnvAny([]string{"DAGGO_DATABASE_DRIVER", "DATABASE_DRIVER"}, "")))
 	if driver == "" {
 		switch {
 		case sqlitePath != "" || sqliteDSN != "":
+			driver = string(DatabaseDriverSQLite)
+		case isPostgresURL(databaseURL):
+			driver = string(DatabaseDriverPostgres)
+		case databaseURL != "":
 			driver = string(DatabaseDriverSQLite)
 		default:
 			driver = string(cfg.Database.Driver)
@@ -135,14 +141,19 @@ func Load() Config {
 	}
 	if sqliteDSN != "" {
 		cfg.Database.SQLite.DSN = sqliteDSN
+	} else if databaseURL != "" && !isPostgresURL(databaseURL) {
+		cfg.Database.SQLite.DSN = databaseURL
 	}
-	cfg.Database.Postgres.Host = getEnvAny([]string{"DAGGO_POSTGRES_HOST"}, cfg.Database.Postgres.Host)
-	cfg.Database.Postgres.Port = getEnvIntAny([]string{"DAGGO_POSTGRES_PORT"}, cfg.Database.Postgres.Port)
-	cfg.Database.Postgres.User = getEnvAny([]string{"DAGGO_POSTGRES_USER"}, cfg.Database.Postgres.User)
-	cfg.Database.Postgres.Password = getEnvAny([]string{"DAGGO_POSTGRES_PASSWORD"}, cfg.Database.Postgres.Password)
-	cfg.Database.Postgres.Database = getEnvAny([]string{"DAGGO_POSTGRES_DATABASE"}, cfg.Database.Postgres.Database)
-	cfg.Database.Postgres.Schema = getEnvAny([]string{"DAGGO_POSTGRES_SCHEMA"}, cfg.Database.Postgres.Schema)
-	cfg.Database.Postgres.SSLMode = getEnvAny([]string{"DAGGO_POSTGRES_SSLMODE"}, cfg.Database.Postgres.SSLMode)
+	if pg, ok := postgresConfigFromURL(databaseURL); ok {
+		cfg.Database.Postgres = mergePostgresConfig(cfg.Database.Postgres, pg)
+	}
+	cfg.Database.Postgres.Host = getEnvAny([]string{"DAGGO_POSTGRES_HOST", "PG_HOST"}, cfg.Database.Postgres.Host)
+	cfg.Database.Postgres.Port = getEnvIntAny([]string{"DAGGO_POSTGRES_PORT", "PG_PORT"}, cfg.Database.Postgres.Port)
+	cfg.Database.Postgres.User = getEnvAny([]string{"DAGGO_POSTGRES_USER", "PG_USER"}, cfg.Database.Postgres.User)
+	cfg.Database.Postgres.Password = getEnvAny([]string{"DAGGO_POSTGRES_PASSWORD", "PG_PASS"}, cfg.Database.Postgres.Password)
+	cfg.Database.Postgres.Database = getEnvAny([]string{"DAGGO_POSTGRES_DATABASE", "PG_DB"}, cfg.Database.Postgres.Database)
+	cfg.Database.Postgres.Schema = getEnvAny([]string{"DAGGO_POSTGRES_SCHEMA", "DATABASE_SCHEMA", "PG_SCHEMA"}, cfg.Database.Postgres.Schema)
+	cfg.Database.Postgres.SSLMode = getEnvAny([]string{"DAGGO_POSTGRES_SSLMODE", "PG_SSLMODE"}, cfg.Database.Postgres.SSLMode)
 
 	cfg.Execution.QueueSize = getEnvIntAny([]string{"RUN_QUEUE_SIZE"}, cfg.Execution.QueueSize)
 	cfg.Execution.Mode = getEnvAny([]string{"RUN_EXECUTION_MODE"}, cfg.Execution.Mode)
@@ -427,6 +438,76 @@ func splitEnvListAny(keys []string, fallback []string) []string {
 		}
 	}
 	return fallback
+}
+
+func isPostgresURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "postgres", "postgresql":
+		return true
+	default:
+		return false
+	}
+}
+
+func postgresConfigFromURL(raw string) (PostgresConfig, bool) {
+	if !isPostgresURL(raw) {
+		return PostgresConfig{}, false
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return PostgresConfig{}, false
+	}
+
+	cfg := PostgresConfig{
+		Host:     parsed.Hostname(),
+		Database: strings.TrimPrefix(parsed.Path, "/"),
+	}
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err == nil && port > 0 {
+			cfg.Port = port
+		}
+	}
+	if parsed.User != nil {
+		cfg.User = parsed.User.Username()
+		if password, ok := parsed.User.Password(); ok {
+			cfg.Password = password
+		}
+	}
+	if sslMode := strings.TrimSpace(parsed.Query().Get("sslmode")); sslMode != "" {
+		cfg.SSLMode = sslMode
+	}
+	return cfg, true
+}
+
+func mergePostgresConfig(base, override PostgresConfig) PostgresConfig {
+	if strings.TrimSpace(override.Host) != "" {
+		base.Host = strings.TrimSpace(override.Host)
+	}
+	if override.Port > 0 {
+		base.Port = override.Port
+	}
+	if strings.TrimSpace(override.User) != "" {
+		base.User = strings.TrimSpace(override.User)
+	}
+	if override.Password != "" {
+		base.Password = override.Password
+	}
+	if strings.TrimSpace(override.Database) != "" {
+		base.Database = strings.TrimSpace(override.Database)
+	}
+	if strings.TrimSpace(override.Schema) != "" {
+		base.Schema = strings.TrimSpace(override.Schema)
+	}
+	if strings.TrimSpace(override.SSLMode) != "" {
+		base.SSLMode = strings.TrimSpace(override.SSLMode)
+	}
+	return base
 }
 
 func loadDotEnv(path string) {
