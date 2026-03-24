@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.1 - 2026-03-24
+- Added a read-only Settings page in the admin UI footer so operators can inspect normalized DAGGO configuration from the browser.
+- Added a sanitized `system.SettingsGet` RPC that exposes admin, database, execution, scheduler, and deploy settings without returning secrets.
+
 ## v0.5.0 - 2026-03-22
 - Added a canonical root `VERSION` file and surfaced the running DAGGO version in the admin UI footer, runtime RPC info, and startup banner.
 - Added version sync checks so release tags, the Go module release version, `VERSION`, the frontend package version, and new changelog entries stay aligned.

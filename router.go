@@ -150,6 +150,7 @@ func BuildRouterWithDepsAndDefinitions(ctx context.Context, cfg config.Config, q
 
 	handleRPC(router, handlerSet.Schedules.SchedulesGetMany, routeGuard)
 	handleRPC(router, handlerSet.System.InfoGet, routeGuard)
+	handleRPC(router, handlerSet.System.SettingsGet, routeGuard)
 
 	router.ServeDocs()
 	slog.Info("daggo: router ready", "status", "all clear")

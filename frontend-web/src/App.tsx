@@ -230,6 +230,57 @@ type SystemInfoResponse = {
   error?: string;
 };
 
+type SettingsSnapshot = {
+  version: string;
+  allowed_origins: string[];
+  registered_jobs: number;
+  registered_queues: number;
+  admin: {
+    port: string;
+    listen_addr: string;
+    ui_enabled: boolean;
+    secret_configured: boolean;
+  };
+  database: {
+    driver: string;
+    sqlite: {
+      path: string;
+      dsn_configured: boolean;
+    };
+    postgres: {
+      host: string;
+      port: number;
+      user: string;
+      database: string;
+      schema: string;
+      sslmode: string;
+      password_configured: boolean;
+    };
+  };
+  execution: {
+    mode: string;
+    queue_size: number;
+    max_concurrent_runs: number;
+    max_concurrent_steps: number;
+  };
+  scheduler: {
+    enabled: boolean;
+    key: string;
+    tick_seconds: number;
+    max_due_per_tick: number;
+  };
+  deploy: {
+    lock_path: string;
+    poll_seconds: number;
+    drain_grace_seconds: number;
+  };
+};
+
+type SettingsGetResponse = {
+  settings?: SettingsSnapshot;
+  error?: string;
+};
+
 type SchedulesResponse = {
   data?: {
     id: number;
@@ -247,7 +298,7 @@ type SchedulesResponse = {
 
 type ScheduleRow = NonNullable<SchedulesResponse["data"]>[number];
 
-type NavSection = "overview" | "jobs" | "queues" | "runs";
+type NavSection = "overview" | "jobs" | "queues" | "runs" | "settings";
 
 type AppRoute = {
   section: NavSection;
@@ -276,6 +327,11 @@ const NAV_ITEMS: { key: NavSection; label: string; detail: string }[] = [
   { key: "queues", label: "Queues", detail: "Ingress, item status, asset metadata" },
   { key: "runs", label: "Runs", detail: "Historical and active executions" },
 ];
+const SETTINGS_PAGE_META = {
+  key: "settings" as const,
+  label: "Settings",
+  detail: "Runtime configuration and deployment posture",
+};
 const OVERVIEW_WINDOWS = [1, 6, 12, 24] as const;
 type OverviewWindow = (typeof OVERVIEW_WINDOWS)[number];
 const OVERVIEW_TRACK_MIN_WIDTH = 780;
@@ -443,6 +499,17 @@ function parseRoute(pathname: string): AppRoute {
     };
   }
 
+  if (normalized === "/settings") {
+    return {
+      section: "settings",
+      path: "/settings",
+      jobKey: "",
+      queueKey: "",
+      queueItemID: 0,
+      runKey: "",
+    };
+  }
+
   const runMatch = normalized.match(/^\/runs\/([^/]+)$/);
   if (runMatch) {
     const decodedRunKey = decodePathSegment(runMatch[1]);
@@ -491,6 +558,7 @@ export function App() {
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
   const [themeMode, setThemeMode] = useState<ThemeMode>(INITIAL_THEME_MODE);
   const [daggoVersion, setDaggoVersion] = useState("");
+  const [settingsSnapshot, setSettingsSnapshot] = useState<SettingsSnapshot | null>(null);
 
   const [activeSection, setActiveSection] = useState<NavSection>(initialRoute.section);
   const [jobsPage, setJobsPage] = useState<"list" | "detail">(
@@ -1234,6 +1302,18 @@ export function App() {
       }
       return;
     }
+    if (route.section === "settings") {
+      setJobsPage("list");
+      setQueuesPage("list");
+      setRunsPage("list");
+      setRouteJobKey("");
+      setRouteQueueKey("");
+      setRouteQueueItemID(0);
+      setRouteRunKey("");
+      setSelectedQueueItemID(0);
+      setSelectedRunID(0);
+      return;
+    }
     setRunsPage(route.runKey.length > 0 ? "detail" : "list");
     setJobsPage("list");
     setQueuesPage("list");
@@ -1274,7 +1354,7 @@ export function App() {
     };
     window.addEventListener("popstate", onPopState);
     void (async () => {
-      await Promise.all([refreshSystemInfo(), refreshJobs(), refreshSchedules(), refreshAllRuns(), refreshQueues()]);
+      await Promise.all([refreshSystemInfo(), refreshSettings(), refreshJobs(), refreshSchedules(), refreshAllRuns(), refreshQueues()]);
       if (!active) {
         return;
       }
@@ -1705,6 +1785,19 @@ export function App() {
     }
   }
 
+  async function refreshSettings() {
+    try {
+      const response = (await api.system.SettingsGet()) as SettingsGetResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      setSettingsSnapshot(response.settings ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load settings");
+      setSettingsSnapshot(null);
+    }
+  }
+
   async function refreshQueues() {
     try {
       setError("");
@@ -2048,6 +2141,7 @@ export function App() {
         refreshJobs(),
         refreshSchedules(),
         refreshAllRuns(),
+        activeSection === "settings" ? refreshSettings() : Promise.resolve(),
         queuesPage === "detail" ? refreshQueueView(selectedQueueKey, selectedQueueItemID) : refreshQueues(),
       ]);
     } finally {
@@ -2085,6 +2179,19 @@ export function App() {
       ),
     [jobLabelByKey, queueItemDetail],
   );
+  const activeSectionLabel =
+    activeSection === "settings" ? SETTINGS_PAGE_META.label : NAV_ITEMS.find((item) => item.key === activeSection)?.label ?? "Overview";
+  const activeSectionDetail =
+    activeSection === "overview"
+      ? "Temporal execution density and live system pulse"
+      : activeSection === "jobs"
+        ? "Structural inventory of executable units and schedules"
+        : activeSection === "queues"
+          ? "Ingress visibility, queue item state, and asset-oriented detail"
+          : activeSection === "settings"
+            ? "Runtime configuration, storage posture, and execution controls"
+            : "Run-centric history, filtering, and step-level diagnostics";
+  const settingsDatabaseIsPostgres = settingsSnapshot?.database.driver === "postgres";
 
   return (
     <div className="app-shell">
@@ -2117,6 +2224,13 @@ export function App() {
         </nav>
 
         <div className="sidebar-foot">
+          <button
+            type="button"
+            className={`sidebar-foot-link ${activeSection === "settings" ? "active" : ""}`}
+            onClick={() => navigatePath("/settings")}
+          >
+            {SETTINGS_PAGE_META.label}
+          </button>
           <a href="/rpc/docs/" target="_blank" rel="noreferrer">
             RPC Docs
           </a>
@@ -2127,16 +2241,8 @@ export function App() {
       <div className="content-shell">
         <header className="content-topbar">
           <div>
-            <h2>{NAV_ITEMS.find((item) => item.key === activeSection)?.label}</h2>
-            <p className="muted">
-              {activeSection === "overview"
-                ? "Temporal execution density and live system pulse"
-                : activeSection === "jobs"
-                  ? "Structural inventory of executable units and schedules"
-                  : activeSection === "queues"
-                    ? "Ingress visibility, queue item state, and asset-oriented detail"
-                    : "Run-centric history, filtering, and step-level diagnostics"}
-            </p>
+            <h2>{activeSectionLabel}</h2>
+            <p className="muted">{activeSectionDetail}</p>
           </div>
           <div className="content-topbar-controls">
             <div className="theme-toggle" role="group" aria-label="Theme mode">
@@ -3244,6 +3350,198 @@ export function App() {
                     </>
                   )}
                 </section>
+              )}
+            </div>
+          ) : null}
+
+          {activeSection === "settings" ? (
+            <div className="settings-page-shell">
+              {!settingsSnapshot ? (
+                <section className="panel">
+                  <p className="muted">Settings are unavailable.</p>
+                </section>
+              ) : (
+                <>
+                  <section className="settings-summary-grid">
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.version || daggoVersion || "-"}</strong>
+                      <span>DAGGO Version</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.database.driver || "-"}</strong>
+                      <span>Database Driver</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.execution.mode || "-"}</strong>
+                      <span>Execution Mode</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.scheduler.enabled ? "Enabled" : "Disabled"}</strong>
+                      <span>Scheduler</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.registered_jobs}</strong>
+                      <span>Registered Jobs</span>
+                    </article>
+                    <article className="stat-card">
+                      <strong>{settingsSnapshot.registered_queues}</strong>
+                      <span>Registered Queues</span>
+                    </article>
+                  </section>
+
+                  <section className="settings-grid">
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Admin</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Port</span>
+                          <strong>{settingsSnapshot.admin.port || "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Listen Addr</span>
+                          <strong>{settingsSnapshot.admin.listen_addr || "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>UI</span>
+                          <strong>{settingsSnapshot.admin.ui_enabled ? "Enabled" : "Disabled"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Admin Secret</span>
+                          <strong>{settingsSnapshot.admin.secret_configured ? "Configured" : "Not configured"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Allowed Origins</span>
+                          <strong>{settingsSnapshot.allowed_origins.length > 0 ? settingsSnapshot.allowed_origins.join(", ") : "-"}</strong>
+                        </div>
+                      </div>
+                    </article>
+
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Database</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Driver</span>
+                          <strong>{settingsSnapshot.database.driver || "-"}</strong>
+                        </div>
+                        {settingsDatabaseIsPostgres ? (
+                          <>
+                            <div className="settings-row">
+                              <span>Host</span>
+                              <strong>{settingsSnapshot.database.postgres.host || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>Port</span>
+                              <strong>{settingsSnapshot.database.postgres.port || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>User</span>
+                              <strong>{settingsSnapshot.database.postgres.user || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>Database</span>
+                              <strong>{settingsSnapshot.database.postgres.database || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>Schema</span>
+                              <strong>{settingsSnapshot.database.postgres.schema || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>SSL Mode</span>
+                              <strong>{settingsSnapshot.database.postgres.sslmode || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>Password</span>
+                              <strong>{settingsSnapshot.database.postgres.password_configured ? "Configured" : "Not configured"}</strong>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="settings-row">
+                              <span>SQLite Path</span>
+                              <strong>{settingsSnapshot.database.sqlite.path || "-"}</strong>
+                            </div>
+                            <div className="settings-row">
+                              <span>SQLite DSN</span>
+                              <strong>{settingsSnapshot.database.sqlite.dsn_configured ? "Configured" : "Not configured"}</strong>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </article>
+
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Execution</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Mode</span>
+                          <strong>{settingsSnapshot.execution.mode || "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Queue Size</span>
+                          <strong>{settingsSnapshot.execution.queue_size}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Max Concurrent Runs</span>
+                          <strong>{settingsSnapshot.execution.max_concurrent_runs}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Max Concurrent Steps</span>
+                          <strong>{settingsSnapshot.execution.max_concurrent_steps}</strong>
+                        </div>
+                      </div>
+                    </article>
+
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Scheduler</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Enabled</span>
+                          <strong>{settingsSnapshot.scheduler.enabled ? "Enabled" : "Disabled"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Key</span>
+                          <strong>{settingsSnapshot.scheduler.key || "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Tick Seconds</span>
+                          <strong>{settingsSnapshot.scheduler.tick_seconds}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Max Due Per Tick</span>
+                          <strong>{settingsSnapshot.scheduler.max_due_per_tick}</strong>
+                        </div>
+                      </div>
+                    </article>
+
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Deploy</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Lock Path</span>
+                          <strong>{settingsSnapshot.deploy.lock_path || "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Poll Seconds</span>
+                          <strong>{settingsSnapshot.deploy.poll_seconds}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Drain Grace Seconds</span>
+                          <strong>{settingsSnapshot.deploy.drain_grace_seconds}</strong>
+                        </div>
+                      </div>
+                    </article>
+                  </section>
+                </>
               )}
             </div>
           ) : null}

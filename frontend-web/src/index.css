@@ -220,6 +220,7 @@ p {
   padding: 8px;
 }
 
+.sidebar-foot-link,
 .sidebar-foot a {
   text-decoration: none;
   border: 1px solid var(--line);
@@ -229,6 +230,17 @@ p {
   background: var(--bg-card);
   border-color: var(--border-default);
   color: var(--text-secondary);
+}
+
+.sidebar-foot-link {
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-foot-link.active {
+  background: var(--bg-active);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
 .sidebar-version {
@@ -2205,6 +2217,63 @@ p {
   gap: 6px;
 }
 
+.settings-page-shell {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 6px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-card {
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-row {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.settings-row span {
+  font-size: 0.67rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.settings-row strong {
+  color: var(--text-primary);
+  font-size: 0.77rem;
+  word-break: break-word;
+}
+
 .queue-summary-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(120px, 1fr));
@@ -3011,6 +3080,10 @@ p {
   .queue-summary-grid {
     grid-template-columns: repeat(3, minmax(120px, 1fr));
   }
+
+  .settings-summary-grid {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
 }
 
 @media (max-width: 860px) {
@@ -3067,6 +3140,10 @@ p {
   }
 
   .queue-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3165,6 +3242,10 @@ p {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
 
+  .settings-summary-grid {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+
   .queue-fact-grid {
     grid-template-columns: 1fr;
   }
@@ -3193,6 +3274,7 @@ p {
   color: var(--text-secondary);
 }
 
+.sidebar-foot-link:hover,
 .sidebar-foot a:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
