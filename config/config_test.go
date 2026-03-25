@@ -20,6 +20,9 @@ func TestDefaultConfigUsesSQLite(t *testing.T) {
 	if cfg.Admin.SecretKey != "" {
 		t.Fatalf("expected admin secret to be empty by default")
 	}
+	if cfg.Retention.RunDays != 0 {
+		t.Fatalf("expected run retention to be disabled by default, got %d", cfg.Retention.RunDays)
+	}
 }
 
 func TestPostgresConfigValidationRequiresConnectionFields(t *testing.T) {
@@ -64,5 +67,25 @@ func TestLoadCanSetAdminSecretKey(t *testing.T) {
 
 	if cfg.Admin.SecretKey != "test-secret" {
 		t.Fatalf("expected admin secret key from env, got %q", cfg.Admin.SecretKey)
+	}
+}
+
+func TestLoadCanSetRunRetentionDays(t *testing.T) {
+	t.Setenv("RUN_RETENTION_DAYS", "45")
+
+	cfg := Load()
+
+	if cfg.Retention.RunDays != 45 {
+		t.Fatalf("expected run retention days 45 from env, got %d", cfg.Retention.RunDays)
+	}
+}
+
+func TestLoadCanDisableRunRetentionWithZero(t *testing.T) {
+	t.Setenv("RUN_RETENTION_DAYS", "0")
+
+	cfg := Load()
+
+	if cfg.Retention.RunDays != 0 {
+		t.Fatalf("expected run retention days 0 from env, got %d", cfg.Retention.RunDays)
 	}
 }

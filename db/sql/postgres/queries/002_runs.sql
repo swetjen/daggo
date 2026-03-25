@@ -26,6 +26,15 @@ FROM runs
 ORDER BY id DESC
 LIMIT $1 OFFSET $2;
 
+-- name: RunGetManyForRetentionPurge :many
+SELECT id
+FROM runs
+WHERE completed_at IS NOT NULL
+  AND completed_at < $1
+  AND status IN ('success', 'failed', 'canceled', 'cancelled')
+ORDER BY completed_at, id
+LIMIT $2;
+
 -- name: RunCount :one
 SELECT COUNT(1) AS total
 FROM runs;
@@ -109,6 +118,10 @@ SET status = $1,
     updated_at = now()
 WHERE id = $4
 RETURNING id, run_key, job_id, status, triggered_by, params_json, queued_at, started_at, completed_at, parent_run_id, rerun_step_key, error_message, created_at, updated_at;
+
+-- name: RunDeleteByID :exec
+DELETE FROM runs
+WHERE id = $1;
 
 -- name: RunStepCreate :one
 INSERT INTO run_steps (run_id, job_node_id, step_key, status, attempt, started_at, completed_at, duration_ms, output_json, error_message, log_excerpt)

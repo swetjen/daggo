@@ -88,6 +88,16 @@ func (q *Queries) RunCreate(ctx context.Context, arg RunCreateParams) (Run, erro
 	return i, err
 }
 
+const runDeleteByID = `-- name: RunDeleteByID :exec
+DELETE FROM runs
+WHERE id = ?
+`
+
+func (q *Queries) RunDeleteByID(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, runDeleteByID, id)
+	return err
+}
+
 const runEventCountByRunID = `-- name: RunEventCountByRunID :one
 SELECT COUNT(*)
 FROM run_events
@@ -453,6 +463,44 @@ func (q *Queries) RunGetManyByJobIDJoinedJobs(ctx context.Context, arg RunGetMan
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyForRetentionPurge = `-- name: RunGetManyForRetentionPurge :many
+SELECT id
+FROM runs
+WHERE completed_at != ''
+  AND completed_at < ?
+  AND status IN ('success', 'failed', 'canceled', 'cancelled')
+ORDER BY completed_at, id
+LIMIT ?
+`
+
+type RunGetManyForRetentionPurgeParams struct {
+	CompletedAt string `json:"completed_at"`
+	Limit       int64  `json:"limit"`
+}
+
+func (q *Queries) RunGetManyForRetentionPurge(ctx context.Context, arg RunGetManyForRetentionPurgeParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyForRetentionPurge, arg.CompletedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

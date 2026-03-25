@@ -29,8 +29,10 @@ type Store interface {
 	QueueJobDeleteByQueueID(context.Context, int64) error
 	QueueJobCreate(context.Context, QueueJobCreateParams) (QueueJob, error)
 	QueueItemCreate(context.Context, QueueItemCreateParams) (QueueItem, error)
+	QueueItemDeleteByID(context.Context, int64) error
 	QueueItemGetByIDJoinedQueues(context.Context, int64) (QueueItemGetByIDJoinedQueuesRow, error)
 	QueueItemGetManyByQueueID(context.Context, QueueItemGetManyByQueueIDParams) ([]QueueItem, error)
+	QueueItemGetManyForRetentionPurge(context.Context, QueueItemGetManyForRetentionPurgeParams) ([]int64, error)
 	QueueItemCountByQueueID(context.Context, int64) (int64, error)
 	QueueItemUpdateLifecycleByID(context.Context, QueueItemUpdateLifecycleByIDParams) (QueueItem, error)
 	QueueItemStatusCountGetManyByQueueID(context.Context, int64) ([]QueueItemStatusCountGetManyByQueueIDRow, error)
@@ -43,10 +45,12 @@ type Store interface {
 	QueueItemStepMetadataGetManyByQueueItemID(context.Context, int64) ([]QueueItemStepMetadatum, error)
 
 	RunCreate(context.Context, RunCreateParams) (Run, error)
+	RunDeleteByID(context.Context, int64) error
 	RunGetByID(context.Context, int64) (Run, error)
 	RunGetManyByJobID(context.Context, RunGetManyByJobIDParams) ([]Run, error)
 	RunCountByJobID(context.Context, int64) (int64, error)
 	RunGetMany(context.Context, RunGetManyParams) ([]Run, error)
+	RunGetManyForRetentionPurge(context.Context, RunGetManyForRetentionPurgeParams) ([]int64, error)
 	RunCount(context.Context) (int64, error)
 	RunGetManyJoinedJobs(context.Context, RunGetManyJoinedJobsParams) ([]RunGetManyJoinedJobsRow, error)
 	RunGetManyByJobIDJoinedJobs(context.Context, RunGetManyByJobIDJoinedJobsParams) ([]RunGetManyByJobIDJoinedJobsRow, error)

@@ -16,6 +16,7 @@ type Config struct {
 	Execution      ExecutionConfig
 	Scheduler      SchedulerConfig
 	Deploy         DeployConfig
+	Retention      RetentionConfig
 }
 
 type AdminConfig struct {
@@ -71,6 +72,10 @@ type DeployConfig struct {
 	DrainGraceSeconds int
 }
 
+type RetentionConfig struct {
+	RunDays int
+}
+
 func Default() Config {
 	return Config{
 		Admin: AdminConfig{
@@ -104,6 +109,9 @@ func Default() Config {
 			LockPath:          "runtime/WILL_DEPLOY",
 			PollSeconds:       1,
 			DrainGraceSeconds: 900,
+		},
+		Retention: RetentionConfig{
+			RunDays: 0,
 		},
 	}
 }
@@ -157,6 +165,7 @@ func Load() Config {
 	cfg.Deploy.LockPath = getEnvAny([]string{"DEPLOY_LOCK_PATH"}, cfg.Deploy.LockPath)
 	cfg.Deploy.PollSeconds = getEnvIntAny([]string{"DEPLOY_LOCK_POLL_SECONDS"}, cfg.Deploy.PollSeconds)
 	cfg.Deploy.DrainGraceSeconds = getEnvIntAny([]string{"DEPLOY_DRAIN_GRACE_SECONDS"}, cfg.Deploy.DrainGraceSeconds)
+	cfg.Retention.RunDays = getEnvIntZeroAllowedAny([]string{"RUN_RETENTION_DAYS"}, cfg.Retention.RunDays)
 
 	return cfg.Normalized()
 }
@@ -239,6 +248,9 @@ func (c Config) Normalized() Config {
 	}
 	if c.Deploy.DrainGraceSeconds > 0 {
 		out.Deploy.DrainGraceSeconds = c.Deploy.DrainGraceSeconds
+	}
+	if c.Retention.RunDays >= 0 {
+		out.Retention.RunDays = c.Retention.RunDays
 	}
 
 	return out
@@ -387,6 +399,20 @@ func getEnvIntAny(keys []string, fallback int) int {
 		}
 		parsed, err := strconv.Atoi(value)
 		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnvIntZeroAllowedAny(keys []string, fallback int) int {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed >= 0 {
 			return parsed
 		}
 	}

@@ -68,6 +68,12 @@ type SettingsDeploy struct {
 	DrainGraceSeconds int    `json:"drain_grace_seconds"`
 }
 
+type SettingsRetention struct {
+	Enabled      bool   `json:"enabled"`
+	RunDays      int    `json:"run_days"`
+	PurgeCadence string `json:"purge_cadence"`
+}
+
 type SettingsSnapshot struct {
 	Version          string            `json:"version"`
 	AllowedOrigins   []string          `json:"allowed_origins"`
@@ -78,6 +84,7 @@ type SettingsSnapshot struct {
 	Execution        SettingsExecution `json:"execution"`
 	Scheduler        SettingsScheduler `json:"scheduler"`
 	Deploy           SettingsDeploy    `json:"deploy"`
+	Retention        SettingsRetention `json:"retention"`
 }
 
 type SettingsGetResponse struct {
@@ -143,6 +150,11 @@ func (h *Handlers) SettingsGet(_ context.Context) (SettingsGetResponse, int) {
 				LockPath:          cfg.Deploy.LockPath,
 				PollSeconds:       cfg.Deploy.PollSeconds,
 				DrainGraceSeconds: cfg.Deploy.DrainGraceSeconds,
+			},
+			Retention: SettingsRetention{
+				Enabled:      cfg.Retention.RunDays > 0,
+				RunDays:      cfg.Retention.RunDays,
+				PurgeCadence: "daily",
 			},
 		},
 	}, rpc.StatusOK

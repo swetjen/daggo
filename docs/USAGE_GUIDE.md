@@ -275,6 +275,7 @@ The public config is centered on `daggo.Config`:
 - `Deploy.LockPath`
 - `Deploy.PollSeconds`
 - `Deploy.DrainGraceSeconds`
+- `Retention.RunDays`
 
 ## Database Modes
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.2 - 2026-03-25
+- Added a disabled-by-default `cfg.Retention.RunDays` / `RUN_RETENTION_DAYS` setting for automatic daily purge of terminal run history older than the configured retention window.
+- Added runtime retention cleanup for old runs, cascading run artifacts, and aged-out queue items whose linked runs have all been purged.
+- Surfaced retention settings in the admin Settings page and system settings RPC snapshot.
+
 ## v0.5.1 - 2026-03-24
 - Added a read-only Settings page in the admin UI footer so operators can inspect normalized DAGGO configuration from the browser.
 - Added a sanitized `system.SettingsGet` RPC that exposes admin, database, execution, scheduler, and deploy settings without returning secrets.

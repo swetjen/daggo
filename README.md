@@ -334,6 +334,7 @@ cfg.Admin.Port = "8080"
 cfg.Admin.SecretKey = "replace-me"
 cfg.DisableUI = false
 cfg.Database.SQLite.Path = "/tmp/daggo.sqlite"
+cfg.Retention.RunDays = 30
 ```
 
 Available config areas:
@@ -345,6 +346,7 @@ Available config areas:
 - `cfg.Execution`: queue size, execution mode, run concurrency, step concurrency.
 - `cfg.Scheduler`: scheduler enablement and tick controls.
 - `cfg.Deploy`: deploy-drain lock settings.
+- `cfg.Retention`: automatic run-history retention and purge settings.
 
 Environment-based startup is still available through `daggo.LoadConfigFromEnv()` for the repo's sample binary and local development.
 

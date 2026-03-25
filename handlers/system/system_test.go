@@ -66,6 +66,9 @@ func TestSettingsGetSanitizesSecretsAndNormalizesConfig(t *testing.T) {
 				PollSeconds:       2,
 				DrainGraceSeconds: 600,
 			},
+			Retention: config.RetentionConfig{
+				RunDays: 45,
+			},
 		},
 	})
 
@@ -99,5 +102,14 @@ func TestSettingsGetSanitizesSecretsAndNormalizesConfig(t *testing.T) {
 	}
 	if len(resp.Settings.AllowedOrigins) != 2 {
 		t.Fatalf("expected 2 allowed origins, got %d", len(resp.Settings.AllowedOrigins))
+	}
+	if !resp.Settings.Retention.Enabled {
+		t.Fatal("expected retention to be enabled")
+	}
+	if resp.Settings.Retention.RunDays != 45 {
+		t.Fatalf("expected retention run days 45, got %d", resp.Settings.Retention.RunDays)
+	}
+	if resp.Settings.Retention.PurgeCadence != "daily" {
+		t.Fatalf("expected retention cadence daily, got %q", resp.Settings.Retention.PurgeCadence)
 	}
 }

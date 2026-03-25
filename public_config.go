@@ -11,6 +11,7 @@ type PostgresConfig = config.PostgresConfig
 type ExecutionConfig = config.ExecutionConfig
 type SchedulerConfig = config.SchedulerConfig
 type DeployConfig = config.DeployConfig
+type RetentionConfig = config.RetentionConfig
 
 const (
 	DatabaseDriverSQLite   = config.DatabaseDriverSQLite

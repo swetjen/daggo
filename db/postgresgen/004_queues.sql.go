@@ -166,6 +166,16 @@ func (q *Queries) QueueItemCreate(ctx context.Context, arg QueueItemCreateParams
 	return i, err
 }
 
+const queueItemDeleteByID = `-- name: QueueItemDeleteByID :exec
+DELETE FROM queue_items
+WHERE id = $1
+`
+
+func (q *Queries) QueueItemDeleteByID(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, queueItemDeleteByID, id)
+	return err
+}
+
 const queueItemGetByIDJoinedQueues = `-- name: QueueItemGetByIDJoinedQueues :one
 SELECT qi.id,
        qi.queue_id,
@@ -269,6 +279,48 @@ func (q *Queries) QueueItemGetManyByQueueID(ctx context.Context, arg QueueItemGe
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const queueItemGetManyForRetentionPurge = `-- name: QueueItemGetManyForRetentionPurge :many
+SELECT qi.id
+FROM queue_items qi
+WHERE qi.completed_at IS NOT NULL
+  AND qi.completed_at < $1
+  AND NOT EXISTS (
+    SELECT 1
+    FROM queue_item_runs qir
+    WHERE qir.queue_item_id = qi.id
+  )
+ORDER BY qi.completed_at, qi.id
+LIMIT $2
+`
+
+type QueueItemGetManyForRetentionPurgeParams struct {
+	CompletedAt sql.NullTime `json:"completed_at"`
+	Limit       int32        `json:"limit"`
+}
+
+func (q *Queries) QueueItemGetManyForRetentionPurge(ctx context.Context, arg QueueItemGetManyForRetentionPurgeParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, queueItemGetManyForRetentionPurge, arg.CompletedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

@@ -135,6 +135,10 @@ func (s *PostgresStore) RunCreate(ctx context.Context, arg RunCreateParams) (Run
 	return fromPostgresRun(row), nil
 }
 
+func (s *PostgresStore) RunDeleteByID(ctx context.Context, id int64) error {
+	return s.queries.RunDeleteByID(ctx, id)
+}
+
 func (s *PostgresStore) RunGetByID(ctx context.Context, id int64) (Run, error) {
 	row, err := s.queries.RunGetByID(ctx, id)
 	if err != nil {
@@ -165,6 +169,13 @@ func (s *PostgresStore) RunGetMany(ctx context.Context, arg RunGetManyParams) ([
 		return nil, err
 	}
 	return mapSlice(rows, fromPostgresRun), nil
+}
+
+func (s *PostgresStore) RunGetManyForRetentionPurge(ctx context.Context, arg RunGetManyForRetentionPurgeParams) ([]int64, error) {
+	return s.queries.RunGetManyForRetentionPurge(ctx, postgresgen.RunGetManyForRetentionPurgeParams{
+		CompletedAt: toNullTime(arg.CompletedAt),
+		Limit:       int32(arg.Limit),
+	})
 }
 
 func (s *PostgresStore) RunCount(ctx context.Context) (int64, error) {

@@ -76,6 +76,19 @@ WHERE queue_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3;
 
+-- name: QueueItemGetManyForRetentionPurge :many
+SELECT qi.id
+FROM queue_items qi
+WHERE qi.completed_at IS NOT NULL
+  AND qi.completed_at < $1
+  AND NOT EXISTS (
+    SELECT 1
+    FROM queue_item_runs qir
+    WHERE qir.queue_item_id = qi.id
+  )
+ORDER BY qi.completed_at, qi.id
+LIMIT $2;
+
 -- name: QueueItemCountByQueueID :one
 SELECT COUNT(*)
 FROM queue_items
@@ -90,6 +103,10 @@ SET status = sqlc.arg('status'),
     updated_at = now()
 WHERE id = sqlc.arg('id')
 RETURNING id, queue_id, queue_item_key, partition_key, status, external_key, payload_json, error_message, queued_at, started_at, completed_at, created_at, updated_at;
+
+-- name: QueueItemDeleteByID :exec
+DELETE FROM queue_items
+WHERE id = $1;
 
 -- name: QueueItemStatusCountGetManyByQueueID :many
 SELECT status, COUNT(*) AS total

@@ -22,6 +22,7 @@ type Deps struct {
 	Executor   *dag.Executor
 	Scheduler  *dag.Scheduler
 	QueueRun   *queue.Runner
+	Retention  *dag.RunRetention
 	DeployLock *dag.DeployLock
 }
 
@@ -71,6 +72,10 @@ func NewWithDefinitions(ctx context.Context, cfg config.Config, queries db.Store
 	}
 	queueRunner := queue.NewRunner(queries, pool, queues, executor, deployLock)
 	queueRunner.Start(ctx)
+	retention := dag.NewRunRetention(queries, pool, dag.RunRetentionOptions{
+		RunDays: cfg.Retention.RunDays,
+	})
+	retention.Start(ctx)
 	return &Deps{
 		Config:     cfg,
 		DB:         queries,
@@ -80,6 +85,7 @@ func NewWithDefinitions(ctx context.Context, cfg config.Config, queries db.Store
 		Executor:   executor,
 		Scheduler:  scheduler,
 		QueueRun:   queueRunner,
+		Retention:  retention,
 		DeployLock: deployLock,
 	}, nil
 }

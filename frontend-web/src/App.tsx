@@ -274,6 +274,11 @@ type SettingsSnapshot = {
     poll_seconds: number;
     drain_grace_seconds: number;
   };
+  retention: {
+    enabled: boolean;
+    run_days: number;
+    purge_cadence: string;
+  };
 };
 
 type SettingsGetResponse = {
@@ -3380,6 +3385,10 @@ export function App() {
                       <span>Scheduler</span>
                     </article>
                     <article className="stat-card">
+                      <strong>{settingsSnapshot.retention.enabled ? `${settingsSnapshot.retention.run_days}d` : "Disabled"}</strong>
+                      <span>Run Retention</span>
+                    </article>
+                    <article className="stat-card">
                       <strong>{settingsSnapshot.registered_jobs}</strong>
                       <span>Registered Jobs</span>
                     </article>
@@ -3537,6 +3546,26 @@ export function App() {
                         <div className="settings-row">
                           <span>Drain Grace Seconds</span>
                           <strong>{settingsSnapshot.deploy.drain_grace_seconds}</strong>
+                        </div>
+                      </div>
+                    </article>
+
+                    <article className="settings-card">
+                      <div className="panel-head compact">
+                        <h4>Retention</h4>
+                      </div>
+                      <div className="settings-list">
+                        <div className="settings-row">
+                          <span>Enabled</span>
+                          <strong>{settingsSnapshot.retention.enabled ? "Enabled" : "Disabled"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Run Days</span>
+                          <strong>{settingsSnapshot.retention.enabled ? settingsSnapshot.retention.run_days : "-"}</strong>
+                        </div>
+                        <div className="settings-row">
+                          <span>Purge Cadence</span>
+                          <strong>{settingsSnapshot.retention.purge_cadence || "-"}</strong>
                         </div>
                       </div>
                     </article>

@@ -79,6 +79,10 @@ func (s *PostgresStore) QueueItemCreate(ctx context.Context, arg QueueItemCreate
 	return fromPostgresQueueItem(row), nil
 }
 
+func (s *PostgresStore) QueueItemDeleteByID(ctx context.Context, id int64) error {
+	return s.queries.QueueItemDeleteByID(ctx, id)
+}
+
 func (s *PostgresStore) QueueItemGetByIDJoinedQueues(ctx context.Context, id int64) (QueueItemGetByIDJoinedQueuesRow, error) {
 	row, err := s.queries.QueueItemGetByIDJoinedQueues(ctx, id)
 	if err != nil {
@@ -97,6 +101,13 @@ func (s *PostgresStore) QueueItemGetManyByQueueID(ctx context.Context, arg Queue
 		return nil, err
 	}
 	return mapSlice(rows, fromPostgresQueueItem), nil
+}
+
+func (s *PostgresStore) QueueItemGetManyForRetentionPurge(ctx context.Context, arg QueueItemGetManyForRetentionPurgeParams) ([]int64, error) {
+	return s.queries.QueueItemGetManyForRetentionPurge(ctx, postgresgen.QueueItemGetManyForRetentionPurgeParams{
+		CompletedAt: toNullTime(arg.CompletedAt),
+		Limit:       int32(arg.Limit),
+	})
 }
 
 func (s *PostgresStore) QueueItemCountByQueueID(ctx context.Context, queueID int64) (int64, error) {
@@ -171,10 +182,10 @@ func (s *PostgresStore) QueueItemRunGetManyByQueueItemIDJoinedRuns(ctx context.C
 
 func (s *PostgresStore) QueueItemStepMetadataUpsert(ctx context.Context, arg QueueItemStepMetadataUpsertParams) (QueueItemStepMetadatum, error) {
 	row, err := s.queries.QueueItemStepMetadataUpsert(ctx, postgresgen.QueueItemStepMetadataUpsertParams{
-		QueueItemID: arg.QueueItemID,
-		JobID:       arg.JobID,
-		RunID:       arg.RunID,
-		StepKey:     arg.StepKey,
+		QueueItemID:  arg.QueueItemID,
+		JobID:        arg.JobID,
+		RunID:        arg.RunID,
+		StepKey:      arg.StepKey,
 		MetadataJson: []byte(arg.MetadataJson),
 	})
 	if err != nil {
@@ -278,22 +289,22 @@ func fromPostgresQueueItemGetByIDJoinedQueuesRow(row postgresgen.QueueItemGetByI
 
 func fromPostgresQueueItemRunGetManyByQueueItemIDJoinedRunsRow(row postgresgen.QueueItemRunGetManyByQueueItemIDJoinedRunsRow) QueueItemRunGetManyByQueueItemIDJoinedRunsRow {
 	return QueueItemRunGetManyByQueueItemIDJoinedRunsRow{
-		ID:            row.ID,
-		QueueItemID:   row.QueueItemID,
-		JobID:         row.JobID,
-		RunID:         row.RunID,
-		CreatedAt:     formatTime(row.CreatedAt),
-		RunKey:        row.RunKey,
-		RunStatus:     row.RunStatus,
-		TriggeredBy:   row.TriggeredBy,
-		QueuedAt:      formatTime(row.QueuedAt),
-		StartedAt:     formatNullTime(row.StartedAt),
-		CompletedAt:   formatNullTime(row.CompletedAt),
-		ParentRunID:   row.ParentRunID,
-		RerunStepKey:  row.RerunStepKey,
+		ID:              row.ID,
+		QueueItemID:     row.QueueItemID,
+		JobID:           row.JobID,
+		RunID:           row.RunID,
+		CreatedAt:       formatTime(row.CreatedAt),
+		RunKey:          row.RunKey,
+		RunStatus:       row.RunStatus,
+		TriggeredBy:     row.TriggeredBy,
+		QueuedAt:        formatTime(row.QueuedAt),
+		StartedAt:       formatNullTime(row.StartedAt),
+		CompletedAt:     formatNullTime(row.CompletedAt),
+		ParentRunID:     row.ParentRunID,
+		RerunStepKey:    row.RerunStepKey,
 		RunErrorMessage: row.RunErrorMessage,
-		JobKey:        row.JobKey,
-		JobDisplayName: row.JobDisplayName,
+		JobKey:          row.JobKey,
+		JobDisplayName:  row.JobDisplayName,
 	}
 }
 
