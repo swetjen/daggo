@@ -134,6 +134,7 @@ func BuildRouterWithDepsAndDefinitions(ctx context.Context, cfg config.Config, q
 	handleRPC(router, handlerSet.Jobs.JobsGetMany, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobByKey, routeGuard)
 	handleRPC(router, handlerSet.Jobs.JobSchedulingUpdate, routeGuard)
+	handleRPC(router, handlerSet.Overview.OverviewGet, routeGuard)
 
 	handleRPC(router, handlerSet.Queues.QueuesGetMany, routeGuard)
 	handleRPC(router, handlerSet.Queues.QueueByKey, routeGuard)
@@ -143,6 +144,7 @@ func BuildRouterWithDepsAndDefinitions(ctx context.Context, cfg config.Config, q
 
 	handleRPC(router, handlerSet.Runs.RunCreate, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunRerunStepCreate, routeGuard)
+	handleRPC(router, handlerSet.Runs.OverviewRunsGetMany, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunsGetMany, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunByID, routeGuard)
 	handleRPC(router, handlerSet.Runs.RunEventsGetMany, routeGuard)

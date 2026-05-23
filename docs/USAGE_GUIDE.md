@@ -92,6 +92,36 @@ Relevant execution settings:
 
 Because runs execute in a separate worker process, the web server can restart independently of the active runner instead of tying run execution to a request-serving goroutine. DAGGO’s deploy-drain support is intended to let new code roll out without immediately disrupting active workers. Additional daemon and runner configurations are planned.
 
+### Worker-Safe Startup
+
+Use `daggo.CurrentProcess()` to distinguish the long-lived server process from an internal worker subprocess:
+
+```go
+process, err := daggo.CurrentProcess()
+if err != nil {
+	log.Fatal(err)
+}
+
+definitions := []any{
+	buildDaggoJob(),
+	buildDaggoQueue(),
+}
+
+if process.Mode == daggo.ProcessModeServer {
+	if err := runServerOnlyStartup(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err != nil {
+	log.Fatal(err)
+}
+```
+
+Construct job and queue definitions in both modes. A worker still needs those definitions to execute `daggo-worker --run-id ...` directly. Keep app-owned startup side effects behind the server-mode guard, including migrations, backfills, one-shot ingests, schedulers, HTTP servers, queue loaders outside DAGGO, deploy monitors, and external calls that should not run before every subprocess step.
+
+DAGGO emits both `run_worker_started` and `run_started` events. A large gap between them usually means the worker spent time in application startup before reaching DAGGO execution. Immediate step failures with errors like `closed pool`, stale DB handles, or invalid clients usually point to app-owned startup or teardown code running in worker mode.
+
 ## Recommended Project Layout
 
 For a real imported application, prefer separating graph wiring from operational code:
@@ -338,6 +368,25 @@ Generated clients pass the same value through their auth option:
 ```ts
 const client = createClient("http://localhost:8000")
 await client.jobs.JobsGetMany({ limit: 50, offset: 0 }, { auth: "replace-me" })
+```
+
+Runs pagination is cursor-based:
+
+```ts
+const page1 = await client.runs.RunsGetMany({ limit: 50, sort: "newest", cursor: "" }, { auth: "replace-me" })
+const page2 = await client.runs.RunsGetMany(
+  { limit: 50, sort: "newest", cursor: page1.next_cursor ?? "" },
+  { auth: "replace-me" },
+)
+```
+
+The Overview UI uses a dedicated snapshot endpoint:
+
+```ts
+await client.overview.OverviewGet(
+  { window_hours: 6, anchor_at: new Date().toISOString(), job_query: "", run_limit: 1000 },
+  { auth: "replace-me" },
+)
 ```
 
 The embedded UI is not authenticated yet, so `cfg.DisableUI = true` is the secure deployment mode today.

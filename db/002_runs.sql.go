@@ -34,6 +34,55 @@ func (q *Queries) RunCountByJobID(ctx context.Context, jobID int64) (int64, erro
 	return total, err
 }
 
+const runCountFiltered = `-- name: RunCountFiltered :one
+SELECT COUNT(1) AS total
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+`
+
+type RunCountFilteredParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+}
+
+func (q *Queries) RunCountFiltered(ctx context.Context, arg RunCountFilteredParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, runCountFiltered,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const runCreate = `-- name: RunCreate :one
 INSERT INTO runs (run_key, job_id, status, triggered_by, params_json, queued_at, started_at, completed_at, parent_run_id, rerun_step_key, error_message)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -443,6 +492,717 @@ func (q *Queries) RunGetManyByJobIDJoinedJobs(ctx context.Context, arg RunGetMan
 	var items []RunGetManyByJobIDJoinedJobsRow
 	for rows.Next() {
 		var i RunGetManyByJobIDJoinedJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyByJobIDWithinWindowJoinedJobs = `-- name: RunGetManyByJobIDWithinWindowJoinedJobs :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE r.job_id = ?1
+  AND CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END >= ?2
+  AND CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END <= ?3
+ORDER BY CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END DESC, r.id DESC
+LIMIT ?5 OFFSET ?4
+`
+
+type RunGetManyByJobIDWithinWindowJoinedJobsParams struct {
+	JobID       int64  `json:"job_id"`
+	WindowStart string `json:"window_start"`
+	WindowEnd   string `json:"window_end"`
+	Offset      int64  `json:"offset"`
+	Limit       int64  `json:"limit"`
+}
+
+type RunGetManyByJobIDWithinWindowJoinedJobsRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyByJobIDWithinWindowJoinedJobs(ctx context.Context, arg RunGetManyByJobIDWithinWindowJoinedJobsParams) ([]RunGetManyByJobIDWithinWindowJoinedJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyByJobIDWithinWindowJoinedJobs,
+		arg.JobID,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyByJobIDWithinWindowJoinedJobsRow
+	for rows.Next() {
+		var i RunGetManyByJobIDWithinWindowJoinedJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyFilteredJoinedJobs = `-- name: RunGetManyFilteredJoinedJobs :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+ORDER BY CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END DESC, r.id DESC
+LIMIT ?7 OFFSET ?6
+`
+
+type RunGetManyFilteredJoinedJobsParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+	Offset      int64       `json:"offset"`
+	Limit       int64       `json:"limit"`
+}
+
+type RunGetManyFilteredJoinedJobsRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyFilteredJoinedJobs(ctx context.Context, arg RunGetManyFilteredJoinedJobsParams) ([]RunGetManyFilteredJoinedJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyFilteredJoinedJobs,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyFilteredJoinedJobsRow
+	for rows.Next() {
+		var i RunGetManyFilteredJoinedJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyFilteredJoinedJobsCursorNewest = `-- name: RunGetManyFilteredJoinedJobsCursorNewest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+  AND (
+    ?6 = ''
+    OR CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END < ?6
+    OR (CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END = ?6 AND r.id < ?7)
+  )
+ORDER BY CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END DESC, r.id DESC
+LIMIT ?8
+`
+
+type RunGetManyFilteredJoinedJobsCursorNewestParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+	CursorAt    interface{} `json:"cursor_at"`
+	CursorID    int64       `json:"cursor_id"`
+	Limit       int64       `json:"limit"`
+}
+
+type RunGetManyFilteredJoinedJobsCursorNewestRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyFilteredJoinedJobsCursorNewest(ctx context.Context, arg RunGetManyFilteredJoinedJobsCursorNewestParams) ([]RunGetManyFilteredJoinedJobsCursorNewestRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyFilteredJoinedJobsCursorNewest,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyFilteredJoinedJobsCursorNewestRow
+	for rows.Next() {
+		var i RunGetManyFilteredJoinedJobsCursorNewestRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyFilteredJoinedJobsCursorOldest = `-- name: RunGetManyFilteredJoinedJobsCursorOldest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+  AND (
+    ?6 = ''
+    OR CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END > ?6
+    OR (CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END = ?6 AND r.id > ?7)
+  )
+ORDER BY CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END ASC, r.id ASC
+LIMIT ?8
+`
+
+type RunGetManyFilteredJoinedJobsCursorOldestParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+	CursorAt    interface{} `json:"cursor_at"`
+	CursorID    int64       `json:"cursor_id"`
+	Limit       int64       `json:"limit"`
+}
+
+type RunGetManyFilteredJoinedJobsCursorOldestRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyFilteredJoinedJobsCursorOldest(ctx context.Context, arg RunGetManyFilteredJoinedJobsCursorOldestParams) ([]RunGetManyFilteredJoinedJobsCursorOldestRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyFilteredJoinedJobsCursorOldest,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyFilteredJoinedJobsCursorOldestRow
+	for rows.Next() {
+		var i RunGetManyFilteredJoinedJobsCursorOldestRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyFilteredJoinedJobsDurationDesc = `-- name: RunGetManyFilteredJoinedJobsDurationDesc :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+ORDER BY
+  CASE
+    WHEN r.started_at != '' AND r.completed_at != '' THEN CAST((julianday(r.completed_at) - julianday(r.started_at)) * 86400000 AS INTEGER)
+    ELSE 0
+  END DESC,
+  CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END DESC,
+  r.id DESC
+LIMIT ?7 OFFSET ?6
+`
+
+type RunGetManyFilteredJoinedJobsDurationDescParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+	Offset      int64       `json:"offset"`
+	Limit       int64       `json:"limit"`
+}
+
+type RunGetManyFilteredJoinedJobsDurationDescRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyFilteredJoinedJobsDurationDesc(ctx context.Context, arg RunGetManyFilteredJoinedJobsDurationDescParams) ([]RunGetManyFilteredJoinedJobsDurationDescRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyFilteredJoinedJobsDurationDesc,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyFilteredJoinedJobsDurationDescRow
+	for rows.Next() {
+		var i RunGetManyFilteredJoinedJobsDurationDescRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunKey,
+			&i.JobID,
+			&i.JobKey,
+			&i.Status,
+			&i.TriggeredBy,
+			&i.ParamsJson,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.ParentRunID,
+			&i.RerunStepKey,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runGetManyFilteredJoinedJobsOldest = `-- name: RunGetManyFilteredJoinedJobsOldest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (?1 = 0 OR r.job_id = ?1)
+  AND (?2 = '' OR r.status = ?2)
+  AND (
+    ?3 = ''
+    OR LOWER(r.run_key) LIKE '%' || ?3 || '%'
+    OR LOWER(j.job_key) LIKE '%' || ?3 || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || ?3 || '%'
+  )
+  AND (
+    ?4 = ''
+    OR (
+      (?4 = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (?4 = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (?4 = 'in_progress' AND r.status = 'running')
+      OR (?4 = 'failed' AND r.status = 'failed')
+      OR (?4 = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    ?5 = 0
+    OR julianday(r.queued_at) >= julianday('now', '-' || ?5 || ' hours')
+  )
+ORDER BY CASE WHEN r.started_at != '' THEN r.started_at ELSE r.queued_at END ASC, r.id ASC
+LIMIT ?7 OFFSET ?6
+`
+
+type RunGetManyFilteredJoinedJobsOldestParams struct {
+	JobID       interface{} `json:"job_id"`
+	Status      interface{} `json:"status"`
+	Search      interface{} `json:"search"`
+	QuickFilter interface{} `json:"quick_filter"`
+	WindowHours interface{} `json:"window_hours"`
+	Offset      int64       `json:"offset"`
+	Limit       int64       `json:"limit"`
+}
+
+type RunGetManyFilteredJoinedJobsOldestRow struct {
+	ID           int64  `json:"id"`
+	RunKey       string `json:"run_key"`
+	JobID        int64  `json:"job_id"`
+	JobKey       string `json:"job_key"`
+	Status       string `json:"status"`
+	TriggeredBy  string `json:"triggered_by"`
+	ParamsJson   string `json:"params_json"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at"`
+	CompletedAt  string `json:"completed_at"`
+	ParentRunID  int64  `json:"parent_run_id"`
+	RerunStepKey string `json:"rerun_step_key"`
+	ErrorMessage string `json:"error_message"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) RunGetManyFilteredJoinedJobsOldest(ctx context.Context, arg RunGetManyFilteredJoinedJobsOldestParams) ([]RunGetManyFilteredJoinedJobsOldestRow, error) {
+	rows, err := q.db.QueryContext(ctx, runGetManyFilteredJoinedJobsOldest,
+		arg.JobID,
+		arg.Status,
+		arg.Search,
+		arg.QuickFilter,
+		arg.WindowHours,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunGetManyFilteredJoinedJobsOldestRow
+	for rows.Next() {
+		var i RunGetManyFilteredJoinedJobsOldestRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.RunKey,

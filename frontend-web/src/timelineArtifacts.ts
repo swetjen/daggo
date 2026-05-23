@@ -16,6 +16,8 @@ export type TimelineArtifact = {
   durationMs: number;
   runKey: string;
   tooltip: string;
+  count?: number;
+  grouped?: boolean;
 };
 
 export type TimelineArtifactRun = {

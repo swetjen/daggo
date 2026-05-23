@@ -38,3 +38,12 @@ Primary index for byodb agents. Start here.
 - The release playbook includes a mandatory downstream validation pass against `/home/incognito/dev/mono/runner`. If runner source changes are needed to accommodate new DAGGO syntax or APIs, pause and ask for approval before editing that repo.
 - Before release, run `make gen-all`.
 - Before release, validate the README startup snippet in a fresh throwaway Go module or equivalent clean environment, including loading the admin UI and its built module assets.
+
+## Subprocess Worker Safety
+- Treat a DAGGO app binary as two distinct runtime modes: the long-lived admin/scheduler process and the `daggo-worker --run-id ...` subprocess.
+- Worker subprocess startup must be minimal and deterministic. Before the worker enters DAGGO run execution, it must not run application startup hooks, one-shot ingests, migrations, backfills, schedulers, HTTP servers, queue loaders, deploy monitors, external API calls, or other long-running side effects.
+- Downstream apps using `RunDefinitions` or `RunRegistry` may still need to construct job definitions before DAGGO can execute a worker run, but any app-owned startup work outside definition construction must be guarded so it only runs in the server process.
+- When adding examples, docs, or app templates that include startup hooks, show an explicit worker-process guard around those hooks.
+- When changing worker launch, run creation, scheduler, or startup command handling, add a test proving that a subprocess worker executes the target run directly without running server-only startup work first.
+- In subprocess mode, validation should include a real worker invocation path, not only in-process executor tests. A fast manual run should not show unexplained queue delay before `run_started`.
+- If a worker exits successfully but the run failed immediately, inspect whether app-owned setup closed or invalidated dependencies before step execution. Errors like `closed pool`, stale DB handles, or 1-5 ms step failures are signals to audit worker startup side effects.

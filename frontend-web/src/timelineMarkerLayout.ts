@@ -5,6 +5,7 @@ const RUN_MARKER_SOFT_MAX_RATIO = 0.45;
 const RUN_MARKER_SOFT_MAX_PX = 220;
 const RUN_MARKER_TRULY_LONG_RATIO = 0.45;
 const SCHEDULE_MARKER_WIDTH_PX = 9;
+const GROUPED_SCHEDULE_MARKER_MAX_PX = 18;
 const MIN_VISIBLE_DURATION_MS = 500;
 
 export type TimelineMarkerLayout = {
@@ -27,9 +28,10 @@ export function computeTimelineMarkerLayout(input: {
   const leftPx = ((artifact.timestampMs - windowStartMs) / safeWindowMs) * safeTrackWidthPx;
 
   if (artifact.state === "will_run" || artifact.kind === "schedule") {
+    const groupedWidth = artifact.count && artifact.count > 1 ? Math.min(GROUPED_SCHEDULE_MARKER_MAX_PX, SCHEDULE_MARKER_WIDTH_PX + artifact.count - 1) : SCHEDULE_MARKER_WIDTH_PX;
     return {
       leftPx,
-      widthPx: SCHEDULE_MARKER_WIDTH_PX,
+      widthPx: groupedWidth,
       zIndex: 2,
     };
   }

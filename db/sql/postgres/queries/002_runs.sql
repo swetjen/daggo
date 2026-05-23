@@ -39,6 +39,33 @@ LIMIT $2;
 SELECT COUNT(1) AS total
 FROM runs;
 
+-- name: RunCountFiltered :one
+SELECT COUNT(1) AS total
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  );
+
 -- name: RunGetManyJoinedJobs :many
 SELECT r.id,
        r.run_key,
@@ -59,6 +86,141 @@ FROM runs r
 JOIN jobs j ON j.id = r.job_id
 ORDER BY r.id DESC
 LIMIT $1 OFFSET $2;
+
+-- name: RunGetManyFilteredJoinedJobs :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  )
+ORDER BY COALESCE(r.started_at, r.queued_at) DESC, r.id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: RunGetManyFilteredJoinedJobsOldest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  )
+ORDER BY COALESCE(r.started_at, r.queued_at) ASC, r.id ASC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: RunGetManyFilteredJoinedJobsDurationDesc :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  )
+ORDER BY
+  CASE
+    WHEN r.started_at IS NOT NULL AND r.completed_at IS NOT NULL THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at))
+    ELSE 0
+  END DESC,
+  COALESCE(r.started_at, r.queued_at) DESC,
+  r.id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
 -- name: RunGetManyByJobIDJoinedJobs :many
 SELECT r.id,
@@ -81,6 +243,126 @@ JOIN jobs j ON j.id = r.job_id
 WHERE r.job_id = $1
 ORDER BY r.id DESC
 LIMIT $2 OFFSET $3;
+
+-- name: RunGetManyByJobIDWithinWindowJoinedJobs :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE r.job_id = sqlc.arg('job_id')
+  AND COALESCE(r.started_at, r.queued_at) >= sqlc.arg('window_start')::timestamptz
+  AND COALESCE(r.started_at, r.queued_at) <= sqlc.arg('window_end')::timestamptz
+ORDER BY COALESCE(r.started_at, r.queued_at) DESC, r.id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: RunGetManyFilteredJoinedJobsCursorNewest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  )
+  AND (
+    sqlc.arg('cursor_at') = ''
+    OR COALESCE(r.started_at, r.queued_at) < NULLIF(sqlc.arg('cursor_at'), '')::timestamptz
+    OR (COALESCE(r.started_at, r.queued_at) = NULLIF(sqlc.arg('cursor_at'), '')::timestamptz AND r.id < sqlc.arg('cursor_id'))
+  )
+ORDER BY COALESCE(r.started_at, r.queued_at) DESC, r.id DESC
+LIMIT sqlc.arg('limit');
+
+-- name: RunGetManyFilteredJoinedJobsCursorOldest :many
+SELECT r.id,
+       r.run_key,
+       r.job_id,
+       j.job_key,
+       r.status,
+       r.triggered_by,
+       r.params_json,
+       r.queued_at,
+       r.started_at,
+       r.completed_at,
+       r.parent_run_id,
+       r.rerun_step_key,
+       r.error_message,
+       r.created_at,
+       r.updated_at
+FROM runs r
+JOIN jobs j ON j.id = r.job_id
+WHERE (sqlc.arg('job_id') = 0 OR r.job_id = sqlc.arg('job_id'))
+  AND (sqlc.arg('status') = '' OR r.status = sqlc.arg('status'))
+  AND (
+    sqlc.arg('search') = ''
+    OR LOWER(r.run_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(j.job_key) LIKE '%' || sqlc.arg('search') || '%'
+    OR LOWER(r.triggered_by) LIKE '%' || sqlc.arg('search') || '%'
+  )
+  AND (
+    sqlc.arg('quick_filter') = ''
+    OR (
+      (sqlc.arg('quick_filter') = 'backfills' AND LOWER(r.triggered_by) LIKE '%backfill%')
+      OR (sqlc.arg('quick_filter') = 'queued' AND r.status IN ('queued', 'pending'))
+      OR (sqlc.arg('quick_filter') = 'in_progress' AND r.status = 'running')
+      OR (sqlc.arg('quick_filter') = 'failed' AND r.status = 'failed')
+      OR (sqlc.arg('quick_filter') = 'scheduled' AND LOWER(r.triggered_by) LIKE '%schedule%')
+    )
+  )
+  AND (
+    sqlc.arg('window_hours') = 0
+    OR r.queued_at >= now() - (sqlc.arg('window_hours')::bigint * interval '1 hour')
+  )
+  AND (
+    sqlc.arg('cursor_at') = ''
+    OR COALESCE(r.started_at, r.queued_at) > NULLIF(sqlc.arg('cursor_at'), '')::timestamptz
+    OR (COALESCE(r.started_at, r.queued_at) = NULLIF(sqlc.arg('cursor_at'), '')::timestamptz AND r.id > sqlc.arg('cursor_id'))
+  )
+ORDER BY COALESCE(r.started_at, r.queued_at) ASC, r.id ASC
+LIMIT sqlc.arg('limit');
 
 -- name: RunGetByIDJoinedJobs :one
 SELECT r.id,

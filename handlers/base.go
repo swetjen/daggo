@@ -3,6 +3,7 @@ package handlers
 import (
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/daggo/handlers/jobs"
+	"github.com/swetjen/daggo/handlers/overview"
 	queuehandlers "github.com/swetjen/daggo/handlers/queues"
 	"github.com/swetjen/daggo/handlers/runs"
 	"github.com/swetjen/daggo/handlers/schedules"
@@ -11,6 +12,7 @@ import (
 
 type Handlers struct {
 	Jobs      *jobs.Handlers
+	Overview  *overview.Handlers
 	Queues    *queuehandlers.Handlers
 	Runs      *runs.Handlers
 	Schedules *schedules.Handlers
@@ -20,6 +22,7 @@ type Handlers struct {
 func New(app *deps.Deps) *Handlers {
 	return &Handlers{
 		Jobs:      jobs.New(app),
+		Overview:  overview.New(app),
 		Queues:    queuehandlers.New(app),
 		Runs:      runs.New(app),
 		Schedules: schedules.New(app),

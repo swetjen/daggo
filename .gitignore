@@ -3,6 +3,7 @@ ERRORS
 .generated/
 /daggo.sqlite*
 runtime/
+inbox/
 .env
 .env.local
 .env.postgres.test.local

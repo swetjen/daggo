@@ -182,12 +182,149 @@ func (s *PostgresStore) RunCount(ctx context.Context) (int64, error) {
 	return s.queries.RunCount(ctx)
 }
 
+func (s *PostgresStore) RunCountFiltered(ctx context.Context, arg RunCountFilteredParams) (int64, error) {
+	return s.queries.RunCountFiltered(ctx, postgresgen.RunCountFilteredParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+	})
+}
+
+func (s *PostgresStore) RunFilteredCount(ctx context.Context, arg RunFilteredParams) (int64, error) {
+	return s.RunCountFiltered(ctx, RunCountFilteredParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+	})
+}
+
 func (s *PostgresStore) RunGetManyJoinedJobs(ctx context.Context, arg RunGetManyJoinedJobsParams) ([]RunGetManyJoinedJobsRow, error) {
 	rows, err := s.queries.RunGetManyJoinedJobs(ctx, postgresgen.RunGetManyJoinedJobsParams{Limit: int32(arg.Limit), Offset: int32(arg.Offset)})
 	if err != nil {
 		return nil, err
 	}
 	return mapSlice(rows, fromPostgresRunGetManyJoinedJobsRow), nil
+}
+
+func (s *PostgresStore) RunFilteredGetMany(ctx context.Context, arg RunFilteredParams) ([]RunGetManyJoinedJobsRow, error) {
+	queryArg := RunGetManyFilteredJoinedJobsParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+		Limit:       arg.Limit,
+		Offset:      arg.Offset,
+	}
+	switch arg.Sort {
+	case "oldest":
+		return s.RunGetManyFilteredJoinedJobsOldest(ctx, queryArg)
+	case "duration_desc":
+		return s.RunGetManyFilteredJoinedJobsDurationDesc(ctx, queryArg)
+	default:
+		return s.RunGetManyFilteredJoinedJobs(ctx, queryArg)
+	}
+}
+
+func (s *PostgresStore) RunWindowGetMany(ctx context.Context, arg RunWindowParams) ([]RunGetManyJoinedJobsRow, error) {
+	rows, err := s.queries.RunGetManyByJobIDWithinWindowJoinedJobs(ctx, postgresgen.RunGetManyByJobIDWithinWindowJoinedJobsParams{
+		JobID:       arg.JobID,
+		WindowStart: mustParseStoredTime(arg.WindowStart),
+		WindowEnd:   mustParseStoredTime(arg.WindowEnd),
+		Offset:      int32(arg.Offset),
+		Limit:       int32(arg.Limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresWindowedRunsRow), nil
+}
+
+func (s *PostgresStore) RunCursorGetMany(ctx context.Context, arg RunCursorParams) ([]RunGetManyJoinedJobsRow, error) {
+	switch arg.Sort {
+	case "oldest":
+		rows, err := s.queries.RunGetManyFilteredJoinedJobsCursorOldest(ctx, postgresgen.RunGetManyFilteredJoinedJobsCursorOldestParams{
+			JobID:       arg.JobID,
+			Status:      arg.Status,
+			Search:      arg.Search,
+			QuickFilter: arg.QuickFilter,
+			WindowHours: arg.WindowHours,
+			CursorAt:    arg.CursorAt,
+			CursorID:    arg.CursorID,
+			Limit:       int32(arg.Limit),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mapSlice(rows, fromPostgresCursorOldestRow), nil
+	default:
+		rows, err := s.queries.RunGetManyFilteredJoinedJobsCursorNewest(ctx, postgresgen.RunGetManyFilteredJoinedJobsCursorNewestParams{
+			JobID:       arg.JobID,
+			Status:      arg.Status,
+			Search:      arg.Search,
+			QuickFilter: arg.QuickFilter,
+			WindowHours: arg.WindowHours,
+			CursorAt:    arg.CursorAt,
+			CursorID:    arg.CursorID,
+			Limit:       int32(arg.Limit),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return mapSlice(rows, fromPostgresCursorNewestRow), nil
+	}
+}
+
+func (s *PostgresStore) RunGetManyFilteredJoinedJobs(ctx context.Context, arg RunGetManyFilteredJoinedJobsParams) ([]RunGetManyJoinedJobsRow, error) {
+	rows, err := s.queries.RunGetManyFilteredJoinedJobs(ctx, postgresgen.RunGetManyFilteredJoinedJobsParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+		Offset:      int32(arg.Offset),
+		Limit:       int32(arg.Limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresFilteredRunsRow), nil
+}
+
+func (s *PostgresStore) RunGetManyFilteredJoinedJobsOldest(ctx context.Context, arg RunGetManyFilteredJoinedJobsParams) ([]RunGetManyJoinedJobsRow, error) {
+	rows, err := s.queries.RunGetManyFilteredJoinedJobsOldest(ctx, postgresgen.RunGetManyFilteredJoinedJobsOldestParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+		Offset:      int32(arg.Offset),
+		Limit:       int32(arg.Limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresFilteredRunsOldestRow), nil
+}
+
+func (s *PostgresStore) RunGetManyFilteredJoinedJobsDurationDesc(ctx context.Context, arg RunGetManyFilteredJoinedJobsParams) ([]RunGetManyJoinedJobsRow, error) {
+	rows, err := s.queries.RunGetManyFilteredJoinedJobsDurationDesc(ctx, postgresgen.RunGetManyFilteredJoinedJobsDurationDescParams{
+		JobID:       arg.JobID,
+		Status:      arg.Status,
+		Search:      arg.Search,
+		QuickFilter: arg.QuickFilter,
+		WindowHours: arg.WindowHours,
+		Offset:      int32(arg.Offset),
+		Limit:       int32(arg.Limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(rows, fromPostgresFilteredRunsDurationRow), nil
 }
 
 func (s *PostgresStore) RunGetManyByJobIDJoinedJobs(ctx context.Context, arg RunGetManyByJobIDJoinedJobsParams) ([]RunGetManyByJobIDJoinedJobsRow, error) {
@@ -498,6 +635,126 @@ func fromPostgresRun(row postgresgen.Run) Run {
 }
 
 func fromPostgresRunGetManyJoinedJobsRow(row postgresgen.RunGetManyJoinedJobsRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresFilteredRunsRow(row postgresgen.RunGetManyFilteredJoinedJobsRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresWindowedRunsRow(row postgresgen.RunGetManyByJobIDWithinWindowJoinedJobsRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresFilteredRunsOldestRow(row postgresgen.RunGetManyFilteredJoinedJobsOldestRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresFilteredRunsDurationRow(row postgresgen.RunGetManyFilteredJoinedJobsDurationDescRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresCursorNewestRow(row postgresgen.RunGetManyFilteredJoinedJobsCursorNewestRow) RunGetManyJoinedJobsRow {
+	return RunGetManyJoinedJobsRow{
+		ID:           row.ID,
+		RunKey:       row.RunKey,
+		JobID:        row.JobID,
+		JobKey:       row.JobKey,
+		Status:       row.Status,
+		TriggeredBy:  row.TriggeredBy,
+		ParamsJson:   fromRawJSON(row.ParamsJson),
+		QueuedAt:     formatTime(row.QueuedAt),
+		StartedAt:    formatNullTime(row.StartedAt),
+		CompletedAt:  formatNullTime(row.CompletedAt),
+		ParentRunID:  row.ParentRunID,
+		RerunStepKey: row.RerunStepKey,
+		ErrorMessage: row.ErrorMessage,
+		CreatedAt:    formatTime(row.CreatedAt),
+		UpdatedAt:    formatTime(row.UpdatedAt),
+	}
+}
+
+func fromPostgresCursorOldestRow(row postgresgen.RunGetManyFilteredJoinedJobsCursorOldestRow) RunGetManyJoinedJobsRow {
 	return RunGetManyJoinedJobsRow{
 		ID:           row.ID,
 		RunKey:       row.RunKey,

@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -64,12 +63,12 @@ func runWithDefinitions(ctx context.Context, cfg Config, registry *dag.Registry,
 		return err
 	}
 
-	handled, runID, err := maybeParseWorkerCommand(os.Args[1:])
+	process, err := CurrentProcess()
 	if err != nil {
 		return err
 	}
-	if handled {
-		return runWorker(ctx, cfg, registry, runID)
+	if process.Mode == ProcessModeWorker {
+		return runWorker(ctx, cfg, registry, process.RunID)
 	}
 
 	app, err := openWithDefinitions(ctx, cfg, registry, queues)

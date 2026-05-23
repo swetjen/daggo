@@ -58,14 +58,21 @@ func main() {
 	cfg.Admin.Port = "8080"
 	cfg.Database.SQLite.Path = "/tmp/daggo-queue-example.sqlite"
 
+	process, err := daggo.CurrentProcess()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	incoming := make(chan daggo.LoadedQueueItem[ImportEnvelope], 1)
-	incoming <- daggo.LoadedQueueItem[ImportEnvelope]{
-		Value: ImportEnvelope{
-			CustomerID: "customer-123",
-			BatchID:    "batch-001",
-		},
-		ExternalKey: "webhook:1",
-		QueuedAt:    time.Now(),
+	if process.Mode == daggo.ProcessModeServer {
+		incoming <- daggo.LoadedQueueItem[ImportEnvelope]{
+			Value: ImportEnvelope{
+				CustomerID: "customer-123",
+				BatchID:    "batch-001",
+			},
+			ExternalKey: "webhook:1",
+			QueuedAt:    time.Now(),
+		}
 	}
 	close(incoming)
 

@@ -169,6 +169,39 @@ type JobListResponse = {
 type RunsListResponse = {
   data?: RunSummary[];
   total?: number;
+  next_cursor?: string;
+  error?: string;
+};
+
+type OverviewJobSchedule = {
+  schedule_key: string;
+  cron_expr: string;
+  timezone: string;
+  description: string;
+};
+
+type OverviewJobSnapshot = {
+  job_key: string;
+  display_name: string;
+  schedules: OverviewJobSchedule[];
+};
+
+type OverviewStatsSnapshot = {
+  running_now: number;
+  failed_in_window: number;
+  success_in_window: number;
+  enabled_schedules: number;
+  quiet_jobs: number;
+  total_runs_in_window: number;
+};
+
+type OverviewResponse = {
+  anchor_at: string;
+  window_start_at: string;
+  window_end_at: string;
+  jobs?: OverviewJobSnapshot[];
+  runs?: RunSummary[];
+  stats?: OverviewStatsSnapshot;
   error?: string;
 };
 
@@ -356,7 +389,7 @@ const TIMELINE_LIVE_REBASE_MS = 60 * 1000;
 const RUNS_WINDOWS = [0, 1, 6, 24] as const;
 type RunsWindow = (typeof RUNS_WINDOWS)[number];
 type RunsQuickFilter = "all" | "backfills" | "queued" | "in_progress" | "failed" | "scheduled";
-type RunsSort = "newest" | "oldest" | "duration_desc";
+type RunsSort = "newest" | "oldest";
 type RunStepGroupKey = "preparing" | "executing" | "failed" | "succeeded" | "not_executed";
 type EventStreamFilter = "all" | "stdout" | "stderr";
 type JobDetailTab = "overview" | "runs";
@@ -402,8 +435,9 @@ const RUNS_QUICK_FILTER_ITEMS: { key: RunsQuickFilter; label: string }[] = [
 const RUNS_SORT_ITEMS: { key: RunsSort; label: string }[] = [
   { key: "newest", label: "Newest first" },
   { key: "oldest", label: "Oldest first" },
-  { key: "duration_desc", label: "Longest duration" },
 ];
+
+const RUN_STATUS_FILTER_ITEMS = ["queued", "running", "success", "failed", "pending", "canceled", "skipped"] as const;
 
 const RUN_STEP_GROUPS: { key: RunStepGroupKey; label: string }[] = [
   { key: "preparing", label: "Preparing" },
@@ -564,6 +598,7 @@ export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(INITIAL_THEME_MODE);
   const [daggoVersion, setDaggoVersion] = useState("");
   const [settingsSnapshot, setSettingsSnapshot] = useState<SettingsSnapshot | null>(null);
+  const [overviewSnapshot, setOverviewSnapshot] = useState<OverviewResponse | null>(null);
 
   const [activeSection, setActiveSection] = useState<NavSection>(initialRoute.section);
   const [jobsPage, setJobsPage] = useState<"list" | "detail">(
@@ -578,6 +613,8 @@ export function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [queues, setQueues] = useState<QueueSummary[]>([]);
   const [allRuns, setAllRuns] = useState<RunSummary[]>([]);
+  const [runsRows, setRunsRows] = useState<RunSummary[]>([]);
+  const [runsTotal, setRunsTotal] = useState(0);
   const [scheduleRows, setScheduleRows] = useState<SchedulesResponse["data"]>([]);
   const [routeJobKey, setRouteJobKey] = useState<string>(initialRoute.section === "jobs" ? initialRoute.jobKey : "");
   const [routeQueueKey, setRouteQueueKey] = useState<string>(initialRoute.section === "queues" ? initialRoute.queueKey : "");
@@ -596,6 +633,8 @@ export function App() {
   const [queuePartitionsTotal, setQueuePartitionsTotal] = useState(0);
   const [queueItemDetail, setQueueItemDetail] = useState<{ item: QueueItemDetail; runs: QueueLinkedRun[] } | null>(null);
   const [runDetail, setRunDetail] = useState<{ summary: RunSummary; steps: RunStep[] } | null>(null);
+  const [selectedJobRunsRows, setSelectedJobRunsRows] = useState<RunSummary[]>([]);
+  const [selectedJobRunsTotal, setSelectedJobRunsTotal] = useState(0);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [runEventsTotal, setRunEventsTotal] = useState(0);
   const [runEventsBusy, setRunEventsBusy] = useState(false);
@@ -630,6 +669,9 @@ export function App() {
   const [runsQuickFilter, setRunsQuickFilter] = useState<RunsQuickFilter>("all");
   const [runsSort, setRunsSort] = useState<RunsSort>("newest");
   const [runsPageIndex, setRunsPageIndex] = useState(0);
+  const [runsCursor, setRunsCursor] = useState("");
+  const [runsCursorStack, setRunsCursorStack] = useState<string[]>([]);
+  const [runsNextCursor, setRunsNextCursor] = useState("");
   const [jobsQuery, setJobsQuery] = useState("");
   const [queuesQuery, setQueuesQuery] = useState("");
   const runHealthPopoverRef = useRef<HTMLButtonElement | null>(null);
@@ -692,19 +734,6 @@ export function App() {
     }
     return byJob;
   }, [scheduleRows]);
-  const enabledSchedulesByJob = useMemo(() => {
-    const byJob: Record<string, ScheduleRow[]> = {};
-    for (const schedule of scheduleRows ?? []) {
-      if (!schedule.is_enabled) {
-        continue;
-      }
-      const rows = byJob[schedule.job_key] ?? [];
-      rows.push(schedule);
-      byJob[schedule.job_key] = rows;
-    }
-    return byJob;
-  }, [scheduleRows]);
-
   const stepStatusByKey = useMemo(() => {
     const statuses: Record<string, string> = {};
     for (const step of runDetail?.steps ?? []) {
@@ -797,14 +826,8 @@ export function App() {
     return new Set<string>([selectedNodeKey, ...selectedNodeDependencies, ...selectedNodeDependents]);
   }, [selectedNodeDependencies, selectedNodeDependents, selectedNodeKey]);
 
-  const selectedJobRuns = useMemo(
-    () => sortedRuns.filter((run) => run.job_key === selectedJobKey).slice(0, 20),
-    [selectedJobKey, sortedRuns],
-  );
-  const selectedJobRunCount = useMemo(
-    () => sortedRuns.filter((run) => run.job_key === selectedJobKey).length,
-    [selectedJobKey, sortedRuns],
-  );
+  const selectedJobRuns = selectedJobRunsRows;
+  const selectedJobRunCount = selectedJobRunsTotal;
 
   const runDetailJob = useMemo(() => {
     if (!runDetail?.summary.job_key) {
@@ -946,28 +969,22 @@ export function App() {
     runStepKeysByGroup,
   ]);
 
-  const overviewFilter = overviewQuery.trim().toLowerCase();
   const overviewJobs = useMemo(() => {
-    const ordered = [...jobs].sort((left, right) => {
-      const leftLabel = left.display_name || left.job_key;
-      const rightLabel = right.display_name || right.job_key;
-      return leftLabel.localeCompare(rightLabel);
-    });
-    if (!overviewFilter) {
-      return ordered;
-    }
-    return ordered.filter((job) => {
-      const displayName = (job.display_name || "").toLowerCase();
-      const jobKey = (job.job_key || "").toLowerCase();
-      return displayName.includes(overviewFilter) || jobKey.includes(overviewFilter);
-    });
-  }, [jobs, overviewFilter]);
+    const rows = [...(overviewSnapshot?.jobs ?? [])];
+    rows.sort((left, right) => (left.display_name || left.job_key).localeCompare(right.display_name || right.job_key));
+    return rows;
+  }, [overviewSnapshot]);
+  const overviewRuns = useMemo(() => sortRunsByFreshness(overviewSnapshot?.runs ?? []), [overviewSnapshot]);
 
-  const overviewWindowMs = overviewWindowHours * 60 * 60 * 1000;
-  const overviewPastMs = Math.round(overviewWindowMs * OVERVIEW_PAST_RATIO);
-  const overviewFutureMs = overviewWindowMs - overviewPastMs;
-  const overviewStartMs = overviewAnchorMs - overviewPastMs;
-  const overviewEndMs = overviewAnchorMs + overviewFutureMs;
+  const fallbackOverviewWindowMs = overviewWindowHours * 60 * 60 * 1000;
+  const fallbackOverviewPastMs = Math.round(fallbackOverviewWindowMs * OVERVIEW_PAST_RATIO);
+  const fallbackOverviewFutureMs = fallbackOverviewWindowMs - fallbackOverviewPastMs;
+  const overviewAnchorDisplayMs = parseTimestamp(overviewSnapshot?.anchor_at ?? "") || overviewAnchorMs;
+  const overviewStartMs =
+    parseTimestamp(overviewSnapshot?.window_start_at ?? "") || overviewAnchorMs - fallbackOverviewPastMs;
+  const overviewEndMs =
+    parseTimestamp(overviewSnapshot?.window_end_at ?? "") || overviewAnchorMs + fallbackOverviewFutureMs;
+  const overviewWindowMs = Math.max(1, overviewEndMs - overviewStartMs);
   const overviewRangeMs = overviewEndMs - overviewStartMs;
   const timelineLabelWidth = timelineViewportWidth > 0 && timelineViewportWidth <= 900 ? 200 : 260;
   const scaledTimelineTrackWidth = Math.max(
@@ -980,12 +997,12 @@ export function App() {
   const overviewDisplayStartMs = overviewStartMs + overviewLiveShiftMs;
   const overviewDisplayEndMs = overviewEndMs + overviewLiveShiftMs;
   const overviewRenderEndMs = overviewEndMs + TIMELINE_LIVE_REBASE_MS;
-  const overviewNowLeftPct = Math.min(100, Math.max(0, ((overviewAnchorMs - overviewStartMs) / overviewRangeMs) * 100));
+  const overviewNowLeftPct = Math.min(100, Math.max(0, ((overviewAnchorDisplayMs - overviewStartMs) / overviewRangeMs) * 100));
   const anchoredToNow = overviewFollowNow;
   const refreshCountdownMs = Math.max(0, nextAutoRefreshAtMs - refreshClockMs);
   const refreshCountdownLabel = formatRefreshCountdown(refreshCountdownMs);
   const refreshJustUpdated = lastRefreshAtMs > 0 && refreshClockMs - lastRefreshAtMs < 1600;
-  const overviewScheduleNowMs = Math.floor(refreshClockMs / MINUTE_MS) * MINUTE_MS;
+  const overviewScheduleNowMs = Math.floor(overviewAnchorDisplayMs / MINUTE_MS) * MINUTE_MS;
   const timelineShiftStyle = useMemo(
     () => ({
       transform: `translateX(-${overviewLiveShiftPx}px)`,
@@ -994,12 +1011,7 @@ export function App() {
     [overviewFollowNow, overviewLiveShiftPx],
   );
 
-  const overviewRunsInWindow = useMemo(() => {
-    return sortedRuns.filter((run) => {
-      const ts = runTimestampMs(run);
-      return ts >= overviewStartMs && ts <= overviewRenderEndMs;
-    });
-  }, [overviewRenderEndMs, overviewStartMs, sortedRuns]);
+  const overviewRunsInWindow = overviewRuns;
 
   const overviewRunsByJob = useMemo(() => {
     const byJob = new Map<string, RunSummary[]>();
@@ -1018,19 +1030,24 @@ export function App() {
     const byJob = new Map<string, TimelineArtifact[]>();
     for (const job of overviewJobs) {
       const runsForJob = overviewRunsByJob.get(job.job_key) ?? [];
-      const artifacts = buildTimelineArtifacts({
-        jobKey: job.job_key,
-        runs: runsForJob,
-        schedules: enabledSchedulesByJob[job.job_key] ?? [],
-        nowMs: overviewScheduleNowMs,
+      const artifacts = compactTimelineArtifacts({
+        artifacts: buildTimelineArtifacts({
+          jobKey: job.job_key,
+          runs: runsForJob,
+          schedules: job.schedules ?? [],
+          nowMs: overviewScheduleNowMs,
+          windowStartMs: overviewStartMs,
+          windowEndMs: overviewRenderEndMs,
+          maxScheduleMarkers: MAX_SCHEDULE_MARKERS_PER_SCHEDULE,
+        }),
         windowStartMs: overviewStartMs,
-        windowEndMs: overviewRenderEndMs,
-        maxScheduleMarkers: MAX_SCHEDULE_MARKERS_PER_SCHEDULE,
+        windowMs: overviewRangeMs,
+        trackWidthPx: timelineTrackWidth,
       });
       byJob.set(job.job_key, artifacts);
     }
     return byJob;
-  }, [enabledSchedulesByJob, overviewJobs, overviewRenderEndMs, overviewRunsByJob, overviewScheduleNowMs, overviewStartMs]);
+  }, [overviewJobs, overviewRangeMs, overviewRenderEndMs, overviewRunsByJob, overviewScheduleNowMs, overviewStartMs, timelineTrackWidth]);
 
   const overviewDateMarkers = useMemo(
     () => buildTimelineDateMarkers(overviewStartMs, overviewEndMs, overviewRangeMs),
@@ -1071,24 +1088,21 @@ export function App() {
     ];
   }, [overviewEndMs, overviewRangeMs, overviewStartMs]);
 
-  const overviewStats = useMemo(() => {
-    const runningNow = sortedRuns.filter((run) => {
-      const status = normalizeStatus(run.status);
-      return status === "running" || status === "queued";
-    }).length;
-    const failedInWindow = overviewRunsInWindow.filter((run) => normalizeStatus(run.status) === "failed").length;
-    const successInWindow = overviewRunsInWindow.filter((run) => normalizeStatus(run.status) === "success").length;
-    const enabledSchedules = (scheduleRows ?? []).filter((schedule) => schedule.is_enabled).length;
-    const quietJobs = overviewJobs.filter((job) => (overviewRunsByJob.get(job.job_key) ?? []).length === 0).length;
-    return {
-      runningNow,
-      failedInWindow,
-      successInWindow,
-      enabledSchedules,
-      quietJobs,
-      totalRunsInWindow: overviewRunsInWindow.length,
-    };
-  }, [overviewJobs, overviewRunsByJob, overviewRunsInWindow, scheduleRows, sortedRuns]);
+  const overviewStats = useMemo(
+    () =>
+      overviewSnapshot?.stats ?? {
+        running_now: overviewRunsInWindow.filter((run) => {
+          const status = normalizeStatus(run.status);
+          return status === "running" || status === "queued" || status === "pending";
+        }).length,
+        failed_in_window: overviewRunsInWindow.filter((run) => normalizeStatus(run.status) === "failed").length,
+        success_in_window: overviewRunsInWindow.filter((run) => normalizeStatus(run.status) === "success").length,
+        enabled_schedules: overviewJobs.reduce((total, job) => total + (job.schedules?.length ?? 0), 0),
+        quiet_jobs: overviewJobs.filter((job) => (overviewRunsByJob.get(job.job_key) ?? []).length === 0).length,
+        total_runs_in_window: overviewRunsInWindow.length,
+      },
+    [overviewJobs, overviewRunsByJob, overviewRunsInWindow, overviewSnapshot],
+  );
 
   const hideTimelineTooltip = useCallback(() => {
     if (timelineTooltipTimerRef.current !== null) {
@@ -1188,14 +1202,6 @@ export function App() {
     setRunHealthPopover(null);
   }, [clearRunHealthPopoverTimers]);
 
-  const runStatuses = useMemo(() => {
-    const unique = new Set<string>();
-    for (const run of sortedRuns) {
-      unique.add(normalizeStatus(run.status));
-    }
-    return Array.from(unique).sort((left, right) => statusRank(left) - statusRank(right) || left.localeCompare(right));
-  }, [sortedRuns]);
-
   const jobLabelByKey = useMemo(() => {
     const labels: Record<string, string> = {};
     for (const job of jobs) {
@@ -1204,68 +1210,10 @@ export function App() {
     return labels;
   }, [jobs]);
 
-  const runsQuickCounts = useMemo(() => {
-    const counts: Record<RunsQuickFilter, number> = {
-      all: sortedRuns.length,
-      backfills: 0,
-      queued: 0,
-      in_progress: 0,
-      failed: 0,
-      scheduled: 0,
-    };
-    for (const run of sortedRuns) {
-      if (matchesRunQuickFilter(run, "backfills")) counts.backfills += 1;
-      if (matchesRunQuickFilter(run, "queued")) counts.queued += 1;
-      if (matchesRunQuickFilter(run, "in_progress")) counts.in_progress += 1;
-      if (matchesRunQuickFilter(run, "failed")) counts.failed += 1;
-      if (matchesRunQuickFilter(run, "scheduled")) counts.scheduled += 1;
-    }
-    return counts;
-  }, [sortedRuns]);
-
-  const runsFilterText = runsSearch.trim().toLowerCase();
-  const filteredRuns = useMemo(() => {
-    let rows = sortedRuns;
-    if (runsQuickFilter !== "all") {
-      rows = rows.filter((run) => matchesRunQuickFilter(run, runsQuickFilter));
-    }
-    if (runsJobFilter !== "all") {
-      rows = rows.filter((run) => run.job_key === runsJobFilter);
-    }
-    if (runsStatusFilter !== "all") {
-      rows = rows.filter((run) => normalizeStatus(run.status) === runsStatusFilter);
-    }
-    if (runsWindowHours > 0) {
-      const threshold = Date.now() - runsWindowHours * 60 * 60 * 1000;
-      rows = rows.filter((run) => runTimestampMs(run) >= threshold);
-    }
-    if (runsFilterText) {
-      rows = rows.filter((run) => {
-        const haystack = `${run.run_key} ${run.job_key} ${run.triggered_by}`.toLowerCase();
-        return haystack.includes(runsFilterText);
-      });
-    }
-    const sorted = [...rows];
-    if (runsSort === "oldest") {
-      sorted.sort((left, right) => runTimestampMs(left) - runTimestampMs(right) || left.id - right.id);
-      return sorted;
-    }
-    if (runsSort === "duration_desc") {
-      sorted.sort((left, right) => runDurationMs(right) - runDurationMs(left) || runTimestampMs(right) - runTimestampMs(left));
-      return sorted;
-    }
-    sorted.sort((left, right) => runTimestampMs(right) - runTimestampMs(left) || right.id - left.id);
-    return sorted;
-  }, [runsFilterText, runsJobFilter, runsQuickFilter, runsSort, runsStatusFilter, runsWindowHours, sortedRuns]);
-
-  const runsPageCount = Math.max(1, Math.ceil(filteredRuns.length / RUNS_PAGE_SIZE));
-  const pagedRuns = useMemo(() => {
-    const start = runsPageIndex * RUNS_PAGE_SIZE;
-    return filteredRuns.slice(start, start + RUNS_PAGE_SIZE);
-  }, [filteredRuns, runsPageIndex]);
-
-  const runsPageStart = filteredRuns.length === 0 ? 0 : runsPageIndex * RUNS_PAGE_SIZE + 1;
-  const runsPageEnd = Math.min(filteredRuns.length, (runsPageIndex + 1) * RUNS_PAGE_SIZE);
+  const runsFilterText = runsSearch.trim();
+  const runsPageCount = Math.max(1, Math.ceil(runsTotal / RUNS_PAGE_SIZE));
+  const runsPageStart = runsTotal === 0 ? 0 : runsPageIndex * RUNS_PAGE_SIZE + 1;
+  const runsPageEnd = runsTotal === 0 ? 0 : runsPageIndex * RUNS_PAGE_SIZE + runsRows.length;
 
   const applyRoute = useCallback((route: AppRoute) => {
     setActiveSection(route.section);
@@ -1359,7 +1307,15 @@ export function App() {
     };
     window.addEventListener("popstate", onPopState);
     void (async () => {
-      await Promise.all([refreshSystemInfo(), refreshSettings(), refreshJobs(), refreshSchedules(), refreshAllRuns(), refreshQueues()]);
+      await Promise.all([
+        refreshSystemInfo(),
+        refreshSettings(),
+        refreshJobs(),
+        refreshSchedules(),
+        refreshOverviewRuns(),
+        route.section === "overview" ? refreshOverviewPage(initialRoute.section === "overview" ? overviewAnchorMs : Date.now()) : Promise.resolve(),
+        refreshQueues(),
+      ]);
       if (!active) {
         return;
       }
@@ -1400,7 +1356,10 @@ export function App() {
       }
       autoRefreshInFlightRef.current = true;
       void Promise.all([
-        refreshAllRuns(),
+        refreshOverviewRuns(),
+        activeSection === "overview" ? refreshOverviewPage() : Promise.resolve(),
+        activeSection === "runs" && runsPage === "list" ? refreshRunsPage() : Promise.resolve(),
+        activeSection === "jobs" && jobsPage === "detail" && selectedJobKey ? refreshSelectedJobRuns(selectedJobKey) : Promise.resolve(),
         activeSection === "queues"
           ? queuesPage === "detail"
             ? refreshQueueView(selectedQueueKey, selectedQueueItemID)
@@ -1416,7 +1375,7 @@ export function App() {
         });
     }, delayMs);
     return () => window.clearTimeout(timer);
-  }, [activeSection, nextAutoRefreshAtMs, queuesPage, selectedQueueItemID, selectedQueueKey]);
+  }, [activeSection, jobsPage, nextAutoRefreshAtMs, queuesPage, runsPage, selectedJobKey, selectedQueueItemID, selectedQueueKey]);
 
   useEffect(() => {
     if (!overviewFollowNow) {
@@ -1598,18 +1557,32 @@ export function App() {
     if (!routeRunKey) {
       return;
     }
-    const matched = allRuns.find((run) => run.run_key === routeRunKey);
+    const matched = [...allRuns, ...runsRows, ...selectedJobRunsRows].find((run) => run.run_key === routeRunKey);
     if (matched) {
       if (selectedRunID !== matched.id) {
         setSelectedRunID(matched.id);
       }
       return;
     }
-    if (allRuns.length > 0) {
+    let active = true;
+    void (async () => {
+      const resolved = await refreshRunSummaryByKey(routeRunKey);
+      if (!active) {
+        return;
+      }
+      if (resolved) {
+        if (selectedRunID !== resolved.id) {
+          setSelectedRunID(resolved.id);
+        }
+        return;
+      }
       setError(`Run ${routeRunKey} was not found`);
       navigatePath("/runs", { replace: true });
-    }
-  }, [allRuns, navigatePath, routeRunKey, selectedRunID]);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [allRuns, navigatePath, routeRunKey, runsRows, selectedJobRunsRows, selectedRunID]);
 
   useEffect(() => {
     if (activeSection !== "queues" || queuesPage !== "detail" || !selectedQueueKey) {
@@ -1709,12 +1682,24 @@ export function App() {
   }, [selectedQueueKey]);
 
   useEffect(() => {
+    if (activeSection !== "jobs" || jobsPage !== "detail" || !selectedJobKey) {
+      setSelectedJobRunsRows([]);
+      setSelectedJobRunsTotal(0);
+      return;
+    }
+    void refreshSelectedJobRuns(selectedJobKey);
+  }, [activeSection, jobsPage, selectedJobKey]);
+
+  useEffect(() => {
     const valid = new Set(filteredRunEvents.map((event) => event.id));
     setCollapsedRunEventIDs((current) => current.filter((id) => valid.has(id)));
   }, [filteredRunEvents]);
 
   useEffect(() => {
     setRunsPageIndex(0);
+    setRunsCursor("");
+    setRunsCursorStack([]);
+    setRunsNextCursor("");
   }, [runsFilterText, runsJobFilter, runsQuickFilter, runsSort, runsStatusFilter, runsWindowHours]);
 
   useEffect(() => {
@@ -1723,6 +1708,20 @@ export function App() {
       setRunsPageIndex(maxPage);
     }
   }, [runsPageCount, runsPageIndex]);
+
+  useEffect(() => {
+    if (activeSection !== "runs" || runsPage !== "list") {
+      return;
+    }
+    void refreshRunsPage();
+  }, [activeSection, runsFilterText, runsJobFilter, runsPage, runsPageIndex, runsQuickFilter, runsSort, runsStatusFilter, runsWindowHours]);
+
+  useEffect(() => {
+    if (activeSection !== "overview") {
+      return;
+    }
+    void refreshOverviewPage();
+  }, [activeSection, overviewAnchorMs, overviewQuery, overviewWindowHours]);
 
   function toggleRunGroupCollapse(group: RunStepGroupKey) {
     setCollapsedRunGroups((current) => {
@@ -1835,16 +1834,119 @@ export function App() {
     }
   }
 
-  async function refreshAllRuns() {
+  async function refreshOverviewRuns() {
     try {
       setError("");
-      const response = (await api.runs.RunsGetMany({ job_key: "", limit: 1000, offset: 0 })) as RunsListResponse;
+      const response = (await api.runs.OverviewRunsGetMany({ limit: 1000 })) as RunsListResponse;
       if (response.error) {
         throw new Error(response.error);
       }
       setAllRuns(response.data ?? []);
     } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load overview runs");
+    }
+  }
+
+  async function refreshOverviewPage(anchorMs = overviewAnchorMs) {
+    try {
+      setError("");
+      const response = (await api.overview.OverviewGet({
+        window_hours: overviewWindowHours,
+        anchor_at: new Date(anchorMs).toISOString(),
+        job_query: overviewQuery,
+        run_limit: 1000,
+      })) as OverviewResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      setOverviewSnapshot(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load overview");
+      setOverviewSnapshot(null);
+    }
+  }
+
+  async function refreshRunsPage(pageIndex = runsPageIndex) {
+    try {
+      setError("");
+      const response = (await api.runs.RunsGetMany({
+        job_key: runsJobFilter === "all" ? "" : runsJobFilter,
+        status: runsStatusFilter === "all" ? "" : runsStatusFilter,
+        search: runsFilterText,
+        quick_filter: runsQuickFilter === "all" ? "" : runsQuickFilter,
+        window_hours: runsWindowHours,
+        sort: runsSort,
+        limit: RUNS_PAGE_SIZE,
+        cursor: pageIndex === 0 ? "" : runsCursor,
+      })) as RunsListResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const rows = response.data ?? [];
+      setRunsRows(rows);
+      setRunsTotal(response.total ?? rows.length);
+      setRunsNextCursor(response.next_cursor ?? "");
+    } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load runs");
+      setRunsRows([]);
+      setRunsTotal(0);
+      setRunsNextCursor("");
+    }
+  }
+
+  async function refreshSelectedJobRuns(jobKey = selectedJobKey) {
+    if (!jobKey) {
+      setSelectedJobRunsRows([]);
+      setSelectedJobRunsTotal(0);
+      return;
+    }
+    try {
+      setError("");
+      const response = (await api.runs.RunsGetMany({
+        job_key: jobKey,
+        status: "",
+        search: "",
+        quick_filter: "",
+        window_hours: 0,
+        sort: "newest",
+        limit: 20,
+        cursor: "",
+      })) as RunsListResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const rows = response.data ?? [];
+      setSelectedJobRunsRows(rows);
+      setSelectedJobRunsTotal(response.total ?? rows.length);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load job runs");
+      setSelectedJobRunsRows([]);
+      setSelectedJobRunsTotal(0);
+    }
+  }
+
+  async function refreshRunSummaryByKey(runKey: string): Promise<RunSummary | null> {
+    if (!runKey) {
+      return null;
+    }
+    try {
+      const response = (await api.runs.RunsGetMany({
+        job_key: "",
+        status: "",
+        search: runKey,
+        quick_filter: "",
+        window_hours: 0,
+        sort: "newest",
+        limit: 25,
+        cursor: "",
+      })) as RunsListResponse;
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      const rows = response.data ?? [];
+      return rows.find((row) => row.run_key === runKey) ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -1993,7 +2095,13 @@ export function App() {
       if (response.error) {
         throw new Error(response.error);
       }
-      await refreshAllRuns();
+      await Promise.all([
+        refreshOverviewRuns(),
+        activeSection === "runs" && runsPage === "list" ? refreshRunsPage() : Promise.resolve(),
+        activeSection === "jobs" && jobsPage === "detail" && (selectedJobKey === jobKey || !selectedJobKey)
+          ? refreshSelectedJobRuns(jobKey)
+          : Promise.resolve(),
+      ]);
       if (options?.openRunOnSuccess && response.run?.run_key) {
         openRun(response.run.run_key);
       }
@@ -2028,7 +2136,7 @@ export function App() {
       if (response.error) {
         throw new Error(response.error);
       }
-      await Promise.all([refreshJobs(), refreshSchedules(), refreshAllRuns()]);
+      await Promise.all([refreshJobs(), refreshSchedules(), refreshOverviewRuns(), refreshSelectedJobRuns(jobKey)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update scheduling state");
     } finally {
@@ -2054,7 +2162,13 @@ export function App() {
       if (response.error) {
         throw new Error(response.error);
       }
-      await Promise.all([refreshAllRuns(), refreshRunDetail(runDetail.summary.id), refreshRunEvents(runDetail.summary.id)]);
+      await Promise.all([
+        refreshOverviewRuns(),
+        activeSection === "runs" && runsPage === "list" ? refreshRunsPage() : Promise.resolve(),
+        activeSection === "jobs" && jobsPage === "detail" && selectedJobKey ? refreshSelectedJobRuns(selectedJobKey) : Promise.resolve(),
+        refreshRunDetail(runDetail.summary.id),
+        refreshRunEvents(runDetail.summary.id),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to terminate run");
     } finally {
@@ -2145,7 +2259,10 @@ export function App() {
       await Promise.all([
         refreshJobs(),
         refreshSchedules(),
-        refreshAllRuns(),
+        refreshOverviewRuns(),
+        activeSection === "overview" ? refreshOverviewPage() : Promise.resolve(),
+        activeSection === "runs" && runsPage === "list" ? refreshRunsPage() : Promise.resolve(),
+        activeSection === "jobs" && jobsPage === "detail" && selectedJobKey ? refreshSelectedJobRuns(selectedJobKey) : Promise.resolve(),
         activeSection === "settings" ? refreshSettings() : Promise.resolve(),
         queuesPage === "detail" ? refreshQueueView(selectedQueueKey, selectedQueueItemID) : refreshQueues(),
       ]);
@@ -2353,7 +2470,7 @@ export function App() {
                 <strong>
                   {formatTsShort(overviewDisplayStartMs)} - {formatTsShort(overviewDisplayEndMs)}
                 </strong>
-                <span className="muted">{overviewStats.totalRunsInWindow} runs in selected window</span>
+                <span className="muted">{overviewStats.total_runs_in_window} runs in selected window</span>
               </div>
 
               <div className="overview-legend">
@@ -2369,23 +2486,23 @@ export function App() {
 
               <div className="overview-kpis">
                 <article className="stat-card">
-                  <strong>{overviewStats.runningNow}</strong>
+                  <strong>{overviewStats.running_now}</strong>
                   <span>Running / queued now</span>
                 </article>
                 <article className="stat-card">
-                  <strong>{overviewStats.failedInWindow}</strong>
+                  <strong>{overviewStats.failed_in_window}</strong>
                   <span>Failures in window</span>
                 </article>
                 <article className="stat-card">
-                  <strong>{overviewStats.successInWindow}</strong>
+                  <strong>{overviewStats.success_in_window}</strong>
                   <span>Successes in window</span>
                 </article>
                 <article className="stat-card">
-                  <strong>{overviewStats.enabledSchedules}</strong>
+                  <strong>{overviewStats.enabled_schedules}</strong>
                   <span>Enabled schedules</span>
                 </article>
                 <article className="stat-card">
-                  <strong>{overviewStats.quietJobs}</strong>
+                  <strong>{overviewStats.quiet_jobs}</strong>
                   <span>Jobs with no runs</span>
                 </article>
               </div>
@@ -3581,7 +3698,7 @@ export function App() {
                 <section className="panel runs-list-panel">
                   <div className="panel-head runs-head">
                     <h3>Runs</h3>
-                    <span className="muted">{filteredRuns.length} shown</span>
+                    <span className="muted">{runsTotal} total</span>
                   </div>
 
                   <div className="runs-quick-tabs">
@@ -3592,7 +3709,6 @@ export function App() {
                         onClick={() => setRunsQuickFilter(item.key)}
                       >
                         <span>{item.label}</span>
-                        <small>{runsQuickCounts[item.key]}</small>
                       </button>
                     ))}
                   </div>
@@ -3616,7 +3732,7 @@ export function App() {
                       Status
                       <select value={runsStatusFilter} onChange={(event) => setRunsStatusFilter(event.target.value)}>
                         <option value="all">All statuses</option>
-                        {runStatuses.map((status) => (
+                        {RUN_STATUS_FILTER_ITEMS.map((status) => (
                           <option key={status} value={status}>
                             {runStatusLabel(status)}
                           </option>
@@ -3665,7 +3781,7 @@ export function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {pagedRuns.map((run) => {
+                        {runsRows.map((run) => {
                           const status = normalizeStatus(run.status);
                           const createdAt = formatTs(run.queued_at || run.started_at || run.completed_at);
                           return (
@@ -3699,7 +3815,7 @@ export function App() {
                             </tr>
                           );
                         })}
-                        {pagedRuns.length === 0 ? (
+                        {runsRows.length === 0 ? (
                           <tr>
                             <td className="runs-empty-row" colSpan={6}>
                               No runs match the current filters.
@@ -3712,16 +3828,37 @@ export function App() {
 
                   <div className="runs-pagination">
                     <span className="muted">
-                      {runsPageStart}-{runsPageEnd} of {filteredRuns.length}
+                      {runsPageStart}-{runsPageEnd} of {runsTotal}
                     </span>
                     <div className="runs-pagination-controls">
-                      <button className="ghost-btn tiny" disabled={runsPageIndex === 0} onClick={() => setRunsPageIndex(0)}>
+                      <button
+                        className="ghost-btn tiny"
+                        disabled={runsPageIndex === 0}
+                        onClick={() => {
+                          setRunsPageIndex(0);
+                          setRunsCursor("");
+                          setRunsCursorStack([]);
+                        }}
+                      >
                         First
                       </button>
                       <button
                         className="ghost-btn tiny"
                         disabled={runsPageIndex === 0}
-                        onClick={() => setRunsPageIndex((current) => Math.max(0, current - 1))}
+                        onClick={() =>
+                          setRunsCursorStack((current) => {
+                            if (current.length === 0) {
+                              setRunsCursor("");
+                              setRunsPageIndex(0);
+                              return current;
+                            }
+                            const next = [...current];
+                            const previousCursor = next.pop() ?? "";
+                            setRunsCursor(previousCursor);
+                            setRunsPageIndex((currentPage) => Math.max(0, currentPage - 1));
+                            return next;
+                          })
+                        }
                       >
                         Prev
                       </button>
@@ -3730,8 +3867,15 @@ export function App() {
                       </span>
                       <button
                         className="ghost-btn tiny"
-                        disabled={runsPageIndex >= runsPageCount - 1}
-                        onClick={() => setRunsPageIndex((current) => Math.min(runsPageCount - 1, current + 1))}
+                        disabled={!runsNextCursor}
+                        onClick={() => {
+                          if (!runsNextCursor) {
+                            return;
+                          }
+                          setRunsCursorStack((current) => [...current, runsCursor]);
+                          setRunsCursor(runsNextCursor);
+                          setRunsPageIndex((current) => current + 1);
+                        }}
                       >
                         Next
                       </button>
@@ -4093,9 +4237,62 @@ function sortRunsByFreshness(rows: RunSummary[]): RunSummary[] {
   return [...rows].sort((left, right) => runTimestampMs(right) - runTimestampMs(left) || right.id - left.id);
 }
 
-function statusRank(status: string): number {
-  const rank = STATUS_ORDER.indexOf(normalizeStatus(status));
-  return rank === -1 ? STATUS_ORDER.length : rank;
+function compactTimelineArtifacts(input: {
+  artifacts: TimelineArtifact[];
+  windowStartMs: number;
+  windowMs: number;
+  trackWidthPx: number;
+}): TimelineArtifact[] {
+  const { artifacts, windowStartMs, windowMs, trackWidthPx } = input;
+  if (artifacts.length <= 1 || windowMs <= 0 || trackWidthPx <= 0) {
+    return artifacts;
+  }
+
+  const bucketWidthPx = 12;
+  const buckets = new Map<number, { runs: TimelineArtifact[]; schedules: TimelineArtifact[] }>();
+  for (const artifact of artifacts) {
+    const leftPx = ((artifact.timestampMs - windowStartMs) / windowMs) * trackWidthPx;
+    const bucketKey = Math.max(0, Math.floor(leftPx / bucketWidthPx));
+    const bucket = buckets.get(bucketKey) ?? { runs: [], schedules: [] };
+    if (artifact.kind === "schedule" || artifact.state === "will_run") {
+      bucket.schedules.push(artifact);
+    } else {
+      bucket.runs.push(artifact);
+    }
+    buckets.set(bucketKey, bucket);
+  }
+
+  const out: TimelineArtifact[] = [];
+  for (const bucketKey of [...buckets.keys()].sort((left, right) => left - right)) {
+    const bucket = buckets.get(bucketKey);
+    if (!bucket) {
+      continue;
+    }
+    out.push(...bucket.runs);
+    if (bucket.schedules.length === 0) {
+      continue;
+    }
+    if (bucket.runs.length > 0 || bucket.schedules.length > 2) {
+      out.push(groupTimelineSchedules(bucket.schedules));
+      continue;
+    }
+    out.push(...bucket.schedules);
+  }
+
+  return out.sort((left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id));
+}
+
+function groupTimelineSchedules(rows: TimelineArtifact[]): TimelineArtifact {
+  const ordered = [...rows].sort((left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id));
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  return {
+    ...first,
+    id: `${first.id}-group`,
+    tooltip: `${rows.length} scheduled runs\nfirst: ${formatTimelineTooltipMoment(first.timestampMs)}\nlast: ${formatTimelineTooltipMoment(last.timestampMs)}`,
+    count: rows.length,
+    grouped: true,
+  };
 }
 
 function normalizeStatus(status: string): string {
@@ -4215,15 +4412,6 @@ function runDurationLabel(run: RunSummary): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}m ${remainder}s`;
-}
-
-function runDurationMs(run: RunSummary): number {
-  const start = parseTimestamp(run.started_at);
-  const end = parseTimestamp(run.completed_at);
-  if (start <= 0 || end <= 0 || end < start) {
-    return 0;
-  }
-  return end - start;
 }
 
 function formatRunDurationCell(run: RunSummary): string {
@@ -4353,30 +4541,6 @@ function formatRunDurationForPopover(run: RunSummary, nowMs: number): string {
     return formatDurationMsLargest(end - start);
   }
   return "-";
-}
-
-function matchesRunQuickFilter(run: RunSummary, filter: RunsQuickFilter): boolean {
-  if (filter === "all") {
-    return true;
-  }
-  const status = normalizeStatus(run.status);
-  const triggeredBy = (run.triggered_by || "").toLowerCase();
-  if (filter === "backfills") {
-    return triggeredBy.includes("backfill");
-  }
-  if (filter === "queued") {
-    return status === "queued" || status === "pending";
-  }
-  if (filter === "in_progress") {
-    return status === "running";
-  }
-  if (filter === "failed") {
-    return status === "failed";
-  }
-  if (filter === "scheduled") {
-    return triggeredBy.includes("schedule");
-  }
-  return true;
 }
 
 function runStepGroupFromStatus(status: string): RunStepGroupKey {
@@ -4538,6 +4702,18 @@ function formatTsShort(ms: number): string {
 function formatTimelineHour(ms: number): string {
   const date = new Date(ms);
   return date.toLocaleTimeString([], { hour: "numeric" }).replace(/\s/g, "");
+}
+
+function formatTimelineTooltipMoment(ms: number): string {
+  if (ms <= 0) {
+    return "-";
+  }
+  return new Date(ms).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function buildTimelineDateMarkers(

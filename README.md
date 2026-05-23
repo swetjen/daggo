@@ -217,6 +217,37 @@ Relevant execution settings:
 
 Because the active run lives in a separate worker process, the web server can restart or roll forward independently without tying run execution to a request-serving goroutine. DAGGO is also designed for deploy-drain coordination so new web code can come up without immediately breaking active workers. We plan to add additional daemon and runner configurations later.
 
+The same application binary has two runtime modes:
+
+- `daggo.ProcessModeServer`: the long-lived admin, scheduler, queue-loader, and HTTP process.
+- `daggo.ProcessModeWorker`: a `daggo-worker --run-id ...` subprocess executing one run.
+
+Build job and queue definitions in both modes, because the worker needs the definitions to execute a run. Guard app-owned startup hooks so they only run in server mode:
+
+```go
+process, err := daggo.CurrentProcess()
+if err != nil {
+	log.Fatal(err)
+}
+
+definitions := []any{
+	buildDaggoJob(),
+	buildDaggoQueue(),
+}
+
+if process.Mode == daggo.ProcessModeServer {
+	if err := runMigrationsAndStartupIngests(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err != nil {
+	log.Fatal(err)
+}
+```
+
+Server-only startup hooks include application migrations, one-shot ingests, queue loading outside DAGGO loaders, deploy monitors, HTTP servers, backfills, schedulers, and external service work that should not happen inside a per-run worker process. If a subprocess run shows a large gap between `run_worker_started` and `run_started`, or a step fails in 1-5 ms with errors such as `closed pool` or stale client handles, audit whether worker mode is running server-only startup or teardown code.
+
 If you want to mount DAGGO into a larger server instead of letting it own the listener, use `daggo.Open(...)` and attach `app.Handler()` wherever you need it.
 
 ## Recommended Project Structure
@@ -400,6 +431,25 @@ Generated clients pass the same value through their auth option:
 ```ts
 const client = createClient("http://localhost:8000")
 await client.jobs.JobsGetMany({ limit: 50, offset: 0 }, { auth: "replace-me" })
+```
+
+Run browsing is cursor-based:
+
+```ts
+const firstPage = await client.runs.RunsGetMany({ limit: 50, sort: "newest", cursor: "" }, { auth: "replace-me" })
+const secondPage = await client.runs.RunsGetMany(
+  { limit: 50, sort: "newest", cursor: firstPage.next_cursor ?? "" },
+  { auth: "replace-me" },
+)
+```
+
+The admin Overview page uses a dedicated snapshot route instead of assembling itself from generic run lists:
+
+```ts
+await client.overview.OverviewGet(
+  { window_hours: 6, anchor_at: new Date().toISOString(), job_query: "", run_limit: 1000 },
+  { auth: "replace-me" },
+)
 ```
 
 The embedded UI is not authenticated yet. For locked-down deployments today, run DAGGO with `cfg.DisableUI = true`.

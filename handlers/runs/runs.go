@@ -3,9 +3,11 @@ package runs
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,9 +38,18 @@ type RunRerunStepCreateRequest struct {
 }
 
 type RunsGetManyRequest struct {
-	JobKey string `json:"job_key"`
-	Limit  int64  `json:"limit"`
-	Offset int64  `json:"offset"`
+	JobKey      string `json:"job_key"`
+	Status      string `json:"status"`
+	Search      string `json:"search"`
+	QuickFilter string `json:"quick_filter"`
+	WindowHours int64  `json:"window_hours"`
+	Sort        string `json:"sort"`
+	Limit       int64  `json:"limit"`
+	Cursor      string `json:"cursor"`
+}
+
+type OverviewRunsGetManyRequest struct {
+	Limit int64 `json:"limit"`
 }
 
 type RunByIDRequest struct {
@@ -109,9 +120,10 @@ type RunCreateResponse struct {
 }
 
 type RunsGetManyResponse struct {
-	Data  []RunSummary `json:"data"`
-	Total int64        `json:"total"`
-	Error string       `json:"error,omitempty"`
+	Data       []RunSummary `json:"data"`
+	Total      int64        `json:"total"`
+	NextCursor string       `json:"next_cursor,omitempty"`
+	Error      string       `json:"error,omitempty"`
 }
 
 type RunByIDResponse struct {
@@ -272,40 +284,43 @@ func (h *Handlers) RunTerminate(ctx context.Context, req RunTerminateRequest) (R
 }
 
 func (h *Handlers) RunsGetMany(ctx context.Context, req RunsGetManyRequest) (RunsGetManyResponse, int) {
-	limit, offset := normalizePagination(req.Limit, req.Offset)
-
-	if strings.TrimSpace(req.JobKey) != "" {
-		job, err := h.app.DB.JobGetByKey(ctx, strings.TrimSpace(req.JobKey))
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return RunsGetManyResponse{Data: []RunSummary{}, Total: 0}, rpc.StatusOK
-			}
-			return RunsGetManyResponse{Error: "failed to load job"}, rpc.StatusError
+	args, limit, err := h.buildCursorRunArgs(ctx, req)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RunsGetManyResponse{Data: []RunSummary{}, Total: 0}, rpc.StatusOK
 		}
-		rows, err := h.app.DB.RunGetManyByJobIDJoinedJobs(ctx, db.RunGetManyByJobIDJoinedJobsParams{
-			JobID:  job.ID,
-			Limit:  limit,
-			Offset: offset,
-		})
-		if err != nil {
-			return RunsGetManyResponse{Error: "failed to load runs"}, rpc.StatusError
-		}
-		total, err := h.app.DB.RunCountByJobID(ctx, job.ID)
-		if err != nil {
-			return RunsGetManyResponse{Error: "failed to count runs"}, rpc.StatusError
-		}
-		data, err := h.decorateSummaries(ctx, toRunSummariesByJob(rows))
-		if err != nil {
-			return RunsGetManyResponse{Error: "failed to load run steps"}, rpc.StatusError
-		}
-		return RunsGetManyResponse{Data: data, Total: total}, rpc.StatusOK
+		return RunsGetManyResponse{Error: err.Error()}, rpc.StatusInvalid
 	}
-
-	rows, err := h.app.DB.RunGetManyJoinedJobs(ctx, db.RunGetManyJoinedJobsParams{Limit: limit, Offset: offset})
+	rows, err := h.app.DB.RunCursorGetMany(ctx, db.RunCursorParams{
+		JobID:       args.JobID,
+		Status:      args.Status,
+		Search:      args.Search,
+		QuickFilter: args.QuickFilter,
+		WindowHours: args.WindowHours,
+		Sort:        args.Sort,
+		CursorAt:    args.CursorAt,
+		CursorID:    args.CursorID,
+		Limit:       limit + 1,
+	})
 	if err != nil {
 		return RunsGetManyResponse{Error: "failed to load runs"}, rpc.StatusError
 	}
-	total, err := h.app.DB.RunCount(ctx)
+	nextCursor := ""
+	if int64(len(rows)) > limit {
+		rows = rows[:limit]
+		nextCursor = encodeRunsCursor(runsCursorToken{
+			Sort:     args.Sort,
+			CursorAt: runSummaryCursorAt(toRunSummary(rows[len(rows)-1])),
+			CursorID: rows[len(rows)-1].ID,
+		})
+	}
+	total, err := h.app.DB.RunFilteredCount(ctx, db.RunFilteredParams{
+		JobID:       args.JobID,
+		Status:      args.Status,
+		Search:      args.Search,
+		QuickFilter: args.QuickFilter,
+		WindowHours: args.WindowHours,
+	})
 	if err != nil {
 		return RunsGetManyResponse{Error: "failed to count runs"}, rpc.StatusError
 	}
@@ -313,7 +328,91 @@ func (h *Handlers) RunsGetMany(ctx context.Context, req RunsGetManyRequest) (Run
 	if err != nil {
 		return RunsGetManyResponse{Error: "failed to load run steps"}, rpc.StatusError
 	}
-	return RunsGetManyResponse{Data: data, Total: total}, rpc.StatusOK
+	return RunsGetManyResponse{Data: data, Total: total, NextCursor: nextCursor}, rpc.StatusOK
+}
+
+func (h *Handlers) OverviewRunsGetMany(ctx context.Context, req OverviewRunsGetManyRequest) (RunsGetManyResponse, int) {
+	limit := normalizeOverviewLimit(req.Limit)
+	jobs := overviewJobs(h.app)
+	if limit <= 0 || len(jobs) == 0 {
+		return RunsGetManyResponse{Data: []RunSummary{}, Total: 0}, rpc.StatusOK
+	}
+
+	type overviewJobState struct {
+		jobID  int64
+		offset int64
+	}
+
+	active := make([]overviewJobState, 0, len(jobs))
+	for _, job := range jobs {
+		row, err := h.app.DB.JobGetByKey(ctx, job.Key)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return RunsGetManyResponse{Error: "failed to load jobs"}, rpc.StatusError
+		}
+		active = append(active, overviewJobState{jobID: row.ID})
+	}
+	if len(active) == 0 {
+		return RunsGetManyResponse{Data: []RunSummary{}, Total: 0}, rpc.StatusOK
+	}
+
+	summaries := make([]RunSummary, 0, limit)
+	remaining := limit
+	for remaining > 0 && len(active) > 0 {
+		share := remaining / int64(len(active))
+		if share <= 0 {
+			share = 1
+		}
+
+		nextActive := make([]overviewJobState, 0, len(active))
+		progressed := false
+		for _, state := range active {
+			if remaining <= 0 {
+				break
+			}
+			fetchLimit := minInt64(share, remaining)
+			rows, err := h.app.DB.RunFilteredGetMany(ctx, db.RunFilteredParams{
+				JobID:       state.jobID,
+				Status:      "",
+				Search:      "",
+				QuickFilter: "",
+				WindowHours: int64(0),
+				Sort:        "newest",
+				Limit:       fetchLimit,
+				Offset:      state.offset,
+			})
+			if err != nil {
+				return RunsGetManyResponse{Error: "failed to load overview runs"}, rpc.StatusError
+			}
+			got := int64(len(rows))
+			if got > 0 {
+				progressed = true
+				summaries = append(summaries, toRunSummaries(rows)...)
+				remaining -= got
+				state.offset += got
+			}
+			if got == fetchLimit {
+				nextActive = append(nextActive, state)
+			}
+		}
+		if !progressed {
+			break
+		}
+		active = nextActive
+	}
+
+	sort.Slice(summaries, func(i, j int) bool {
+		left := runSummaryFreshnessTime(summaries[i])
+		right := runSummaryFreshnessTime(summaries[j])
+		if left.Equal(right) {
+			return summaries[i].ID > summaries[j].ID
+		}
+		return left.After(right)
+	})
+
+	return RunsGetManyResponse{Data: summaries, Total: int64(len(summaries))}, rpc.StatusOK
 }
 
 func (h *Handlers) RunByID(ctx context.Context, req RunByIDRequest) (RunByIDResponse, int) {
@@ -584,6 +683,170 @@ func normalizePagination(limit, offset int64) (int64, int64) {
 		offset = 0
 	}
 	return limit, offset
+}
+
+func normalizeCursorLimit(limit int64) int64 {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 200 {
+		return 200
+	}
+	return limit
+}
+
+func normalizeOverviewLimit(limit int64) int64 {
+	if limit <= 0 {
+		return 1000
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
+func normalizeRunStatusFilter(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "", "all":
+		return ""
+	case "queued", "pending", "running", "success", "failed", "skipped", "canceled", "cancelled":
+		return strings.TrimSpace(strings.ToLower(status))
+	default:
+		return ""
+	}
+}
+
+func normalizeRunQuickFilter(filter string) string {
+	switch strings.TrimSpace(strings.ToLower(filter)) {
+	case "", "all":
+		return ""
+	case "backfills", "queued", "in_progress", "failed", "scheduled":
+		return strings.TrimSpace(strings.ToLower(filter))
+	default:
+		return ""
+	}
+}
+
+func normalizeRunSort(sortKey string) string {
+	switch strings.TrimSpace(strings.ToLower(sortKey)) {
+	case "oldest":
+		return "oldest"
+	default:
+		return "newest"
+	}
+}
+
+func overviewJobs(app *deps.Deps) []dag.JobDefinition {
+	if app == nil || app.Registry == nil {
+		return nil
+	}
+	out := append([]dag.JobDefinition(nil), app.Registry.Jobs()...)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
+type runsCursorToken struct {
+	Sort     string `json:"sort"`
+	CursorAt string `json:"cursor_at"`
+	CursorID int64  `json:"cursor_id"`
+}
+
+func (h *Handlers) buildCursorRunArgs(ctx context.Context, req RunsGetManyRequest) (db.RunCursorParams, int64, error) {
+	limit := normalizeCursorLimit(req.Limit)
+	args := db.RunFilteredParams{
+		JobID:       0,
+		Status:      normalizeRunStatusFilter(req.Status),
+		Search:      strings.TrimSpace(strings.ToLower(req.Search)),
+		QuickFilter: normalizeRunQuickFilter(req.QuickFilter),
+		WindowHours: maxInt64(req.WindowHours, 0),
+		Sort:        normalizeRunSort(req.Sort),
+		Limit:       limit,
+	}
+	if jobKey := strings.TrimSpace(req.JobKey); jobKey != "" {
+		job, err := h.app.DB.JobGetByKey(ctx, jobKey)
+		if err != nil {
+			return db.RunCursorParams{}, 0, err
+		}
+		args.JobID = job.ID
+	}
+	cursor, err := decodeRunsCursor(req.Cursor)
+	if err != nil {
+		return db.RunCursorParams{}, 0, err
+	}
+	sortKey := normalizeRunSort(req.Sort)
+	if cursor.Sort != "" && cursor.Sort == sortKey {
+		args.Sort = cursor.Sort
+	} else {
+		cursor = runsCursorToken{}
+	}
+	return db.RunCursorParams{
+		JobID:       args.JobID,
+		Status:      args.Status,
+		Search:      args.Search,
+		QuickFilter: args.QuickFilter,
+		WindowHours: args.WindowHours,
+		Sort:        sortKey,
+		CursorAt:    cursor.CursorAt,
+		CursorID:    cursor.CursorID,
+		Limit:       limit,
+	}, limit, nil
+}
+
+func runSummaryFreshnessTime(run RunSummary) time.Time {
+	for _, candidate := range []string{run.StartedAt, run.QueuedAt, run.CompletedAt} {
+		if ts, err := time.Parse(time.RFC3339Nano, candidate); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
+func runSummaryCursorAt(run RunSummary) string {
+	for _, candidate := range []string{run.StartedAt, run.QueuedAt, run.CompletedAt} {
+		if strings.TrimSpace(candidate) != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func encodeRunsCursor(cursor runsCursorToken) string {
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeRunsCursor(value string) (runsCursorToken, error) {
+	if strings.TrimSpace(value) == "" {
+		return runsCursorToken{}, nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		return runsCursorToken{}, errors.New("invalid cursor")
+	}
+	var cursor runsCursorToken
+	if err := json.Unmarshal(payload, &cursor); err != nil {
+		return runsCursorToken{}, errors.New("invalid cursor")
+	}
+	return cursor, nil
+}
+
+func maxInt64(left, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func minInt64(left, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func nonEmpty(value, fallback string) string {
