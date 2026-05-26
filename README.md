@@ -76,6 +76,8 @@ func main() {
 }
 ```
 
+Keep dependency constructors used for DAGGO definitions lightweight and worker-safe. If setup needs migrations, one-shot ingests, eager external calls, long-running loaders, or resource teardown, put that work behind the server-mode guard shown in the runner model section.
+
 `jobs.ContentIngestionJob(...)` mounts named ops onto the DAG definition:
 
 ```go
@@ -248,7 +250,28 @@ if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err !
 
 Server-only startup hooks include application migrations, one-shot ingests, queue loading outside DAGGO loaders, deploy monitors, HTTP servers, backfills, schedulers, and external service work that should not happen inside a per-run worker process. If a subprocess run shows a large gap between `run_worker_started` and `run_started`, or a step fails in 1-5 ms with errors such as `closed pool` or stale client handles, audit whether worker mode is running server-only startup or teardown code.
 
-If you want to mount DAGGO into a larger server instead of letting it own the listener, use `daggo.Open(...)` and attach `app.Handler()` wherever you need it.
+If you want to mount DAGGO into a larger server instead of letting it own the listener, use `daggo.Open(...)` and attach `app.Handler()` wherever you need it. Embedded mode still needs an explicit worker branch:
+
+```go
+process, err := daggo.CurrentProcess()
+if err != nil {
+	log.Fatal(err)
+}
+
+definitions := []any{buildDaggoJob()}
+if process.Mode == daggo.ProcessModeWorker {
+	if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err != nil {
+		log.Fatal(err)
+	}
+	return
+}
+
+app, err := daggo.OpenDefinitions(context.Background(), cfg, definitions...)
+if err != nil {
+	log.Fatal(err)
+}
+defer app.Close()
+```
 
 ## Recommended Project Structure
 

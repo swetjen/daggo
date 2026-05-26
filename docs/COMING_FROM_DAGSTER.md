@@ -72,6 +72,7 @@ DAGGO uses an operator-focused shell:
 - You can keep runtime params minimal; DAGGO is optimized for code-defined jobs.
 - Prefer deterministic outputs and explicit step keys.
 - Keep job behavior stable under code changes by preserving step/output types.
+- DAGGO subprocess workers re-enter the same binary as `daggo-worker --run-id ...`; use `daggo.CurrentProcess()` to keep Dagster-style sensors, startup resources, backfills, external calls, and server-only loaders out of worker startup.
 
 ## Package Direction
 

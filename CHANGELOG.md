@@ -1,6 +1,8 @@
 # Changelog
 
 ## v0.5.2 - 2026-03-25
+- Added `daggo.CurrentProcess()` with `ProcessModeServer` and `ProcessModeWorker` so imported apps can guard server-only startup work from subprocess workers.
+- Documented worker-safe startup layout for `RunDefinitions(...)`, embedded `OpenDefinitions(...)`, and Dagster migration scenarios.
 - Added a disabled-by-default `cfg.Retention.RunDays` / `RUN_RETENTION_DAYS` setting for automatic daily purge of terminal run history older than the configured retention window.
 - Added runtime retention cleanup for old runs, cascading run artifacts, and aged-out queue items whose linked runs have all been purged.
 - Surfaced retention settings in the admin Settings page and system settings RPC snapshot.

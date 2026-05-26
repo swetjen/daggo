@@ -120,6 +120,8 @@ if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err !
 
 Construct job and queue definitions in both modes. A worker still needs those definitions to execute `daggo-worker --run-id ...` directly. Keep app-owned startup side effects behind the server-mode guard, including migrations, backfills, one-shot ingests, schedulers, HTTP servers, queue loaders outside DAGGO, deploy monitors, and external calls that should not run before every subprocess step.
 
+Dependency constructors used while building definitions should be lightweight, deterministic, and safe to run in a worker subprocess. Open heavy clients lazily in step code or guard eager startup work with `ProcessModeServer`.
+
 DAGGO emits both `run_worker_started` and `run_started` events. A large gap between them usually means the worker spent time in application startup before reaching DAGGO execution. Immediate step failures with errors like `closed pool`, stale DB handles, or invalid clients usually point to app-owned startup or teardown code running in worker mode.
 
 ## Recommended Project Layout
@@ -270,10 +272,23 @@ This pattern gives you:
 
 ## Embedded App Mode
 
-If you want to mount DAGGO inside a larger HTTP server, open an app directly:
+If you want to mount DAGGO inside a larger HTTP server, branch worker subprocesses before opening the embedded app:
 
 ```go
-app, err := daggo.Open(context.Background(), cfg, job)
+process, err := daggo.CurrentProcess()
+if err != nil {
+	log.Fatal(err)
+}
+
+definitions := []any{job}
+if process.Mode == daggo.ProcessModeWorker {
+	if err := daggo.RunDefinitions(context.Background(), cfg, definitions...); err != nil {
+		log.Fatal(err)
+	}
+	return
+}
+
+app, err := daggo.OpenDefinitions(context.Background(), cfg, definitions...)
 if err != nil {
 	log.Fatal(err)
 }
