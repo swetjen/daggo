@@ -1,8 +1,13 @@
 # Changelog
 
-## v0.5.2 - 2026-03-25
+## v0.6.0 - 2026-05-28
+- Added a dedicated Overview snapshot RPC and admin timeline that balances recent runs across jobs, shows schedule/run activity, and surfaces window-level run stats.
+- Added server-side run filtering, quick filters, cursor pagination, and sortable run history for SQLite and PostgreSQL.
 - Added `daggo.CurrentProcess()` with `ProcessModeServer` and `ProcessModeWorker` so imported apps can guard server-only startup work from subprocess workers.
+- Added a real subprocess regression test proving `daggo-worker --run-id ...` executes a run without running guarded server startup work.
 - Documented worker-safe startup layout for `RunDefinitions(...)`, embedded `OpenDefinitions(...)`, and Dagster migration scenarios.
+
+## v0.5.2 - 2026-03-25
 - Added a disabled-by-default `cfg.Retention.RunDays` / `RUN_RETENTION_DAYS` setting for automatic daily purge of terminal run history older than the configured retention window.
 - Added runtime retention cleanup for old runs, cascading run artifacts, and aged-out queue items whose linked runs have all been purged.
 - Surfaced retention settings in the admin Settings page and system settings RPC snapshot.
