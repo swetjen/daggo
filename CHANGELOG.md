@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.6.1 - 2026-05-29
+- Updated `github.com/swetjen/virtuous` from `v0.0.17` to `v0.0.36`.
+
 ## v0.6.0 - 2026-05-28
 - Added a dedicated Overview snapshot RPC and admin timeline that balances recent runs across jobs, shows schedule/run activity, and surfaces window-level run stats.
 - Added server-side run filtering, quick filters, cursor pagination, and sortable run history for SQLite and PostgreSQL.

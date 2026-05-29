@@ -5,9 +5,11 @@ go 1.25
 require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/minio/minio-go/v7 v7.0.98
+	github.com/openai/openai-go/v3 v3.24.0
 	github.com/playwright-community/playwright-go v0.5700.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/swetjen/virtuous v0.0.17
+	github.com/swetjen/virtuous v0.0.36
+	google.golang.org/genai v1.48.0
 	modernc.org/sqlite v1.34.5
 )
 
@@ -37,7 +39,6 @@ require (
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
-	github.com/openai/openai-go/v3 v3.24.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
@@ -53,7 +54,6 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
-	google.golang.org/genai v1.48.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/grpc v1.66.2 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
