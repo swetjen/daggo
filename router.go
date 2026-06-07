@@ -14,7 +14,7 @@ import (
 	"github.com/swetjen/daggo/handlers"
 	"github.com/swetjen/daggo/middleware"
 	"github.com/swetjen/daggo/queue"
-	"github.com/swetjen/virtuous/httpapi"
+	"github.com/swetjen/virtuous"
 	"github.com/swetjen/virtuous/rpc"
 )
 
@@ -84,8 +84,8 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router, application *deps.Deps
 		mux.Handle("/", embedAndServeReact())
 	}
 
-	handler := httpapi.Cors(
-		httpapi.WithAllowedOrigins(cfg.AllowedOrigins...),
+	handler := virtuous.Cors(
+		virtuous.WithAllowedOrigins(cfg.AllowedOrigins...),
 	)(mux)
 	return handler
 }

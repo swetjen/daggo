@@ -8,7 +8,7 @@ require (
 	github.com/openai/openai-go/v3 v3.24.0
 	github.com/playwright-community/playwright-go v0.5700.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/swetjen/virtuous v0.0.36
+	github.com/swetjen/virtuous v0.0.54
 	google.golang.org/genai v1.48.0
 	modernc.org/sqlite v1.34.5
 )

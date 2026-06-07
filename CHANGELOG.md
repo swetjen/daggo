@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.6.2 - 2026-06-07
+- Updated `github.com/swetjen/virtuous` from `v0.0.36` to `v0.0.54`.
+
 ## v0.6.1 - 2026-05-29
 - Updated `github.com/swetjen/virtuous` from `v0.0.17` to `v0.0.36`.
 
