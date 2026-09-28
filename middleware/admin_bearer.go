@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -38,11 +40,20 @@ func (g AdminBearerGuard) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 			token := strings.TrimPrefix(header, prefix)
-			if token != g.Token {
+			if !constantTimeEqual(token, g.Token) {
 				http.Error(w, "invalid admin token", http.StatusUnauthorized)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// constantTimeEqual compares two secrets without leaking, through timing, how
+// many leading bytes match or how long the expected value is. Both sides are
+// hashed first so the comparison always runs over equal-length inputs.
+func constantTimeEqual(got, want string) bool {
+	gotSum := sha256.Sum256([]byte(got))
+	wantSum := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(gotSum[:], wantSum[:]) == 1
 }
