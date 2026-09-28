@@ -10,8 +10,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/swetjen/daggo/config"
@@ -23,6 +26,15 @@ import (
 
 const (
 	internalWorkerCommand = "daggo-worker"
+
+	// maxDrainCheckInterval bounds how long a finished drain can go
+	// unnoticed once it has started.
+	maxDrainCheckInterval = 200 * time.Millisecond
+	// interruptRunsTimeout bounds recording interrupted runs at shutdown.
+	interruptRunsTimeout = 15 * time.Second
+	// drainFinishTimeout bounds how long Run waits, after the listener has
+	// closed, for the drain to finish shutting the server down.
+	drainFinishTimeout = 10 * time.Second
 )
 
 type App struct {
@@ -36,6 +48,11 @@ type App struct {
 	handler  http.Handler
 	server   *http.Server
 	deps     *deps.Deps
+
+	// drainDone is closed when the drain monitor has returned. closed is
+	// closed by Close and ends the monitor.
+	drainDone chan struct{}
+	closed    chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -80,7 +97,14 @@ func runWithDefinitions(ctx context.Context, cfg Config, registry *dag.Registry,
 			log.Printf("daggo: close failed: %v", closeErr)
 		}
 	}()
-	return app.ListenAndServe()
+	stopSignals := app.handleShutdownSignals()
+	defer stopSignals()
+
+	err = app.ListenAndServe()
+	// The listener closes as soon as shutdown begins. Let the drain finish
+	// shutting down before resources are closed and the process exits.
+	app.waitForDrain(drainFinishTimeout)
+	return err
 }
 
 func Open(ctx context.Context, cfg Config, jobs ...dag.JobDefinition) (*App, error) {
@@ -136,8 +160,10 @@ func openWithDefinitions(ctx context.Context, cfg Config, registry *dag.Registry
 			Addr:    cfg.ListenAddr(),
 			Handler: handler,
 		},
+		drainDone: make(chan struct{}),
+		closed:    make(chan struct{}),
 	}
-	startDeployDrainMonitor(runtimeCtx, app.server, application, cancel)
+	app.startDrainMonitor()
 	return app, nil
 }
 
@@ -229,6 +255,9 @@ func (a *App) Close() error {
 		return nil
 	}
 	a.closeOnce.Do(func() {
+		if a.closed != nil {
+			close(a.closed)
+		}
 		if a.cancel != nil {
 			a.cancel()
 		}
@@ -320,42 +349,151 @@ func runWorker(ctx context.Context, cfg config.Config, registry *dag.Registry, r
 	return nil
 }
 
-func startDeployDrainMonitor(runtimeCtx context.Context, server *http.Server, app *deps.Deps, cancel context.CancelFunc) {
-	if runtimeCtx == nil || server == nil || app == nil || app.DeployLock == nil || app.Executor == nil {
-		return
+// handleShutdownSignals makes SIGINT and SIGTERM start a graceful drain: new
+// runs are blocked, the scheduler stops creating runs, in-flight runs get the
+// deploy drain grace period to finish, and the server then shuts down. A
+// second signal ends the grace period immediately. The returned function
+// restores default signal handling.
+func (a *App) handleShutdownSignals() func() {
+	if a == nil || a.deps == nil || a.deps.DeployLock == nil {
+		return func() {}
 	}
-	interval := app.DeployLock.PollInterval()
-	if interval <= 0 {
-		interval = time.Second
-	}
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		received := 0
 		for {
 			select {
-			case <-runtimeCtx.Done():
+			case <-done:
 				return
-			case <-ticker.C:
-				if !app.DeployLock.IsDraining() {
+			case sig := <-signals:
+				received++
+				reason := "signal " + sig.String()
+				if received == 1 {
+					log.Printf(
+						"daggo: received %s; draining in-flight runs for up to %s (send the signal again to stop now)",
+						sig, a.deps.DeployLock.GracePeriod(),
+					)
+					a.deps.DeployLock.BeginDrain(reason)
 					continue
 				}
-				if app.Executor.IsIdle() {
-					log.Printf("daggo: deploy drain lock active and executor is idle; shutting down")
-					shutdownServer(server, cancel)
-					return
-				}
-				if app.DeployLock.ShouldForceExit() {
-					log.Printf(
-						"daggo: deploy drain grace period exceeded; forcing shutdown active_runs=%d queue_depth=%d",
-						app.Executor.ActiveRuns(),
-						app.Executor.QueueDepth(),
-					)
-					shutdownServer(server, cancel)
-					return
-				}
+				log.Printf("daggo: received %s again; ending in-flight runs now", sig)
+				a.deps.DeployLock.ForceExit(reason)
 			}
 		}
 	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			signal.Stop(signals)
+			close(done)
+		})
+	}
+}
+
+// waitForDrain waits for a drain that is in progress to finish shutting down.
+// It returns immediately when no drain has started.
+func (a *App) waitForDrain(timeout time.Duration) {
+	if a == nil || a.drainDone == nil || a.deps == nil || a.deps.DeployLock == nil {
+		return
+	}
+	if _, draining := a.deps.DeployLock.DrainStartedAt(); !draining {
+		return
+	}
+	select {
+	case <-a.drainDone:
+	case <-time.After(timeout):
+		log.Printf("daggo: timed out after %s waiting for the drain to finish", timeout)
+	}
+}
+
+// startDrainMonitor watches for a drain, whether it starts from the deploy
+// lock file or from a termination signal, and then shuts the server down:
+// once the executor is idle, or once the grace period is over, in which case
+// the runs still in flight are interrupted first.
+func (a *App) startDrainMonitor() {
+	if a == nil || a.drainDone == nil {
+		return
+	}
+	if a.runtime == nil || a.server == nil || a.deps == nil || a.deps.DeployLock == nil || a.deps.Executor == nil {
+		close(a.drainDone)
+		return
+	}
+	go func() {
+		defer close(a.drainDone)
+		if !a.waitForDrainStart() {
+			return
+		}
+		a.finishDrain()
+	}()
+}
+
+// waitForDrainStart blocks until a drain begins. It reports false when the
+// app is closed, or its context ends, without a drain having started.
+func (a *App) waitForDrainStart() bool {
+	lock := a.deps.DeployLock
+	interval := lock.PollInterval()
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.closed:
+			return false
+		case <-lock.DrainStarted():
+			return true
+		case <-a.runtime.Done():
+			// A drain that began together with the context ending still
+			// has to run to completion.
+			_, draining := lock.DrainStartedAt()
+			return draining
+		case <-ticker.C:
+			if lock.IsDraining() {
+				return true
+			}
+		}
+	}
+}
+
+func (a *App) finishDrain() {
+	lock := a.deps.DeployLock
+	executor := a.deps.Executor
+
+	interval := lock.PollInterval()
+	if interval <= 0 || interval > maxDrainCheckInterval {
+		interval = maxDrainCheckInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		if executor.IsIdle() {
+			log.Printf("daggo: drain active (%s) and executor is idle; shutting down", lock.DrainReason())
+			break
+		}
+		if lock.ShouldForceExit() {
+			log.Printf(
+				"daggo: drain grace period is over; interrupting in-flight runs active_runs=%d queue_depth=%d",
+				executor.ActiveRuns(),
+				executor.QueueDepth(),
+			)
+			ctx, stop := context.WithTimeout(context.Background(), interruptRunsTimeout)
+			interrupted := executor.InterruptActiveRuns(ctx, dag.RunInterruptedReason)
+			stop()
+			log.Printf("daggo: interrupted %d run(s) for shutdown run_ids=%v", len(interrupted), interrupted)
+			break
+		}
+		select {
+		case <-a.closed:
+			return
+		case <-lock.ForceExitRequested():
+		case <-ticker.C:
+		}
+	}
+	shutdownServer(a.server, a.cancel)
 }
 
 func shutdownServer(server *http.Server, cancel context.CancelFunc) {
