@@ -89,3 +89,90 @@ func TestLoadCanDisableRunRetentionWithZero(t *testing.T) {
 		t.Fatalf("expected run retention days 0 from env, got %d", cfg.Retention.RunDays)
 	}
 }
+
+func TestMaxConcurrentRunsDefaultsDependOnExecutionMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		configured int
+		want       int
+	}{
+		{name: "subprocess unset uses subprocess default", mode: "subprocess", configured: 0, want: DefaultSubprocessMaxConcurrentRuns},
+		{name: "default mode unset uses subprocess default", mode: "", configured: 0, want: DefaultSubprocessMaxConcurrentRuns},
+		{name: "in_process unset stays serial", mode: "in_process", configured: 0, want: DefaultInProcessMaxConcurrentRuns},
+		{name: "subprocess explicit one is honored", mode: "subprocess", configured: 1, want: 1},
+		{name: "subprocess explicit value is honored", mode: "subprocess", configured: 3, want: 3},
+		{name: "in_process explicit value is honored", mode: "in_process", configured: 4, want: 4},
+		{name: "negative is treated as unset", mode: "subprocess", configured: -2, want: DefaultSubprocessMaxConcurrentRuns},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Execution.Mode = tt.mode
+			cfg.Execution.MaxConcurrentRuns = tt.configured
+
+			normalized := cfg.Normalized()
+			if got := normalized.Execution.MaxConcurrentRuns; got != tt.want {
+				t.Fatalf("MaxConcurrentRuns = %d, want %d", got, tt.want)
+			}
+			if got := normalized.Normalized().Execution.MaxConcurrentRuns; got != tt.want {
+				t.Fatalf("normalizing twice changed MaxConcurrentRuns to %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	if DefaultSubprocessMaxConcurrentRuns != 8 {
+		t.Fatalf("subprocess default changed to %d; update the changelog and docs", DefaultSubprocessMaxConcurrentRuns)
+	}
+	if DefaultInProcessMaxConcurrentRuns != 1 {
+		t.Fatalf("in_process default changed to %d; update the changelog and docs", DefaultInProcessMaxConcurrentRuns)
+	}
+}
+
+func TestLoadLeavesMaxConcurrentRunsUnsetWithoutEnv(t *testing.T) {
+	t.Setenv("RUN_MAX_CONCURRENT_RUNS", "")
+	t.Setenv("RUN_EXECUTION_MODE", "")
+
+	cfg := Load()
+
+	if cfg.Execution.MaxConcurrentRuns != 0 {
+		t.Fatalf("expected unset cap to stay unset after Load, got %d", cfg.Execution.MaxConcurrentRuns)
+	}
+	if got := cfg.Normalized().Execution.MaxConcurrentRuns; got != DefaultSubprocessMaxConcurrentRuns {
+		t.Fatalf("expected subprocess default %d, got %d", DefaultSubprocessMaxConcurrentRuns, got)
+	}
+
+	// Switching the mode in code after Load must not inherit the
+	// subprocess default.
+	cfg.Execution.Mode = "in_process"
+	if got := cfg.Normalized().Execution.MaxConcurrentRuns; got != DefaultInProcessMaxConcurrentRuns {
+		t.Fatalf("expected in_process default %d, got %d", DefaultInProcessMaxConcurrentRuns, got)
+	}
+}
+
+func TestLoadHonorsExplicitMaxConcurrentRuns(t *testing.T) {
+	t.Setenv("RUN_EXECUTION_MODE", "subprocess")
+	t.Setenv("RUN_MAX_CONCURRENT_RUNS", "1")
+
+	cfg := Load()
+
+	if cfg.Execution.MaxConcurrentRuns != 1 {
+		t.Fatalf("expected explicit cap 1 from env, got %d", cfg.Execution.MaxConcurrentRuns)
+	}
+	if got := cfg.Normalized().Execution.MaxConcurrentRuns; got != 1 {
+		t.Fatalf("expected explicit cap 1 to survive normalization, got %d", got)
+	}
+}
+
+func TestLoadUsesInProcessDefaultWhenModeComesFromEnv(t *testing.T) {
+	t.Setenv("RUN_EXECUTION_MODE", "in_process")
+	t.Setenv("RUN_MAX_CONCURRENT_RUNS", "")
+
+	cfg := Load()
+
+	if got := cfg.Normalized().Execution.MaxConcurrentRuns; got != DefaultInProcessMaxConcurrentRuns {
+		t.Fatalf("expected in_process default %d, got %d", DefaultInProcessMaxConcurrentRuns, got)
+	}
+}

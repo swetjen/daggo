@@ -52,9 +52,23 @@ type PostgresConfig struct {
 	SSLMode  string
 }
 
+const (
+	// DefaultSubprocessMaxConcurrentRuns is the number of worker processes
+	// DAGGO runs at once in subprocess mode when MaxConcurrentRuns is unset.
+	DefaultSubprocessMaxConcurrentRuns = 8
+	// DefaultInProcessMaxConcurrentRuns is the number of runs DAGGO executes
+	// at once in in_process mode when MaxConcurrentRuns is unset.
+	DefaultInProcessMaxConcurrentRuns = 1
+)
+
 type ExecutionConfig struct {
-	QueueSize          int
-	Mode               string
+	QueueSize int
+	Mode      string
+	// MaxConcurrentRuns caps how many runs execute at once. Zero means
+	// "unset": Normalized resolves it from Mode, to
+	// DefaultSubprocessMaxConcurrentRuns in subprocess mode and
+	// DefaultInProcessMaxConcurrentRuns otherwise. Any positive value is
+	// honored as-is in both modes; additional runs wait for a free slot.
 	MaxConcurrentRuns  int
 	MaxConcurrentSteps int
 }
@@ -96,7 +110,7 @@ func Default() Config {
 		Execution: ExecutionConfig{
 			QueueSize:          128,
 			Mode:               "subprocess",
-			MaxConcurrentRuns:  1,
+			MaxConcurrentRuns:  0,
 			MaxConcurrentSteps: 8,
 		},
 		Scheduler: SchedulerConfig{
@@ -154,7 +168,7 @@ func Load() Config {
 
 	cfg.Execution.QueueSize = getEnvIntAny([]string{"RUN_QUEUE_SIZE"}, cfg.Execution.QueueSize)
 	cfg.Execution.Mode = getEnvAny([]string{"RUN_EXECUTION_MODE"}, cfg.Execution.Mode)
-	cfg.Execution.MaxConcurrentRuns = getEnvIntAny([]string{"RUN_MAX_CONCURRENT_RUNS"}, cfg.Execution.MaxConcurrentRuns)
+	cfg.Execution.MaxConcurrentRuns = getEnvIntAny([]string{"RUN_MAX_CONCURRENT_RUNS"}, 0)
 	cfg.Execution.MaxConcurrentSteps = getEnvIntAny([]string{"RUN_MAX_CONCURRENT_STEPS"}, cfg.Execution.MaxConcurrentSteps)
 
 	cfg.Scheduler.Enabled = getEnvBoolAny([]string{"SCHEDULER_ENABLED"}, cfg.Scheduler.Enabled)
@@ -167,7 +181,15 @@ func Load() Config {
 	cfg.Deploy.DrainGraceSeconds = getEnvIntAny([]string{"DEPLOY_DRAIN_GRACE_SECONDS"}, cfg.Deploy.DrainGraceSeconds)
 	cfg.Retention.RunDays = getEnvIntZeroAllowedAny([]string{"RUN_RETENTION_DAYS"}, cfg.Retention.RunDays)
 
-	return cfg.Normalized()
+	maxConcurrentRunsSet := cfg.Execution.MaxConcurrentRuns > 0
+	out := cfg.Normalized()
+	if !maxConcurrentRunsSet {
+		// Leave the cap unset so it is resolved from the execution mode that
+		// is in effect when the runtime starts, even if the caller changes
+		// Execution.Mode after loading.
+		out.Execution.MaxConcurrentRuns = 0
+	}
+	return out
 }
 
 func (c Config) Normalized() Config {
@@ -220,9 +242,7 @@ func (c Config) Normalized() Config {
 	if strings.TrimSpace(c.Execution.Mode) != "" {
 		out.Execution.Mode = strings.TrimSpace(c.Execution.Mode)
 	}
-	if c.Execution.MaxConcurrentRuns > 0 {
-		out.Execution.MaxConcurrentRuns = c.Execution.MaxConcurrentRuns
-	}
+	out.Execution.MaxConcurrentRuns = ResolveMaxConcurrentRuns(out.Execution.Mode, c.Execution.MaxConcurrentRuns)
 	if c.Execution.MaxConcurrentSteps > 0 {
 		out.Execution.MaxConcurrentSteps = c.Execution.MaxConcurrentSteps
 	}
@@ -254,6 +274,19 @@ func (c Config) Normalized() Config {
 	}
 
 	return out
+}
+
+// ResolveMaxConcurrentRuns returns the run concurrency cap for an execution
+// mode. A positive configured value is always honored. An unset (zero or
+// negative) value resolves to the default for the mode.
+func ResolveMaxConcurrentRuns(mode string, configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	if strings.EqualFold(strings.TrimSpace(mode), "subprocess") {
+		return DefaultSubprocessMaxConcurrentRuns
+	}
+	return DefaultInProcessMaxConcurrentRuns
 }
 
 func (c Config) ListenAddr() string {
