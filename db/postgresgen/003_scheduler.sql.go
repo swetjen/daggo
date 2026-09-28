@@ -102,6 +102,47 @@ func (q *Queries) SchedulerScheduleRunGetDistinctMany(ctx context.Context) ([]Sc
 	return items, nil
 }
 
+const schedulerScheduleRunGetManyForRetentionPurge = `-- name: SchedulerScheduleRunGetManyForRetentionPurge :many
+SELECT ssr.id
+FROM scheduler_schedule_runs ssr
+WHERE ssr.scheduled_for < $1
+  AND NOT EXISTS (
+    SELECT 1
+    FROM runs r
+    WHERE r.run_key = ssr.run_key
+  )
+ORDER BY ssr.scheduled_for, ssr.id
+LIMIT $2
+`
+
+type SchedulerScheduleRunGetManyForRetentionPurgeParams struct {
+	ScheduledFor time.Time `json:"scheduled_for"`
+	Limit        int32     `json:"limit"`
+}
+
+func (q *Queries) SchedulerScheduleRunGetManyForRetentionPurge(ctx context.Context, arg SchedulerScheduleRunGetManyForRetentionPurgeParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, schedulerScheduleRunGetManyForRetentionPurge, arg.ScheduledFor, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const schedulerScheduleRunUpdateByID = `-- name: SchedulerScheduleRunUpdateByID :one
 UPDATE scheduler_schedule_runs
 SET run_key = $1,

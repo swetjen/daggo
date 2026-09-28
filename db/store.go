@@ -78,6 +78,7 @@ type Store interface {
 	SchedulerScheduleRunsCreateIfAbsent(context.Context, SchedulerScheduleRunsCreateIfAbsentParams) ([]SchedulerScheduleRun, error)
 	SchedulerScheduleRunUpdateByID(context.Context, SchedulerScheduleRunUpdateByIDParams) (SchedulerScheduleRun, error)
 	SchedulerScheduleRunDeleteByID(context.Context, int64) error
+	SchedulerScheduleRunGetManyForRetentionPurge(context.Context, SchedulerScheduleRunGetManyForRetentionPurgeParams) ([]int64, error)
 	SchedulerScheduleRunGetDistinctMany(context.Context) ([]SchedulerScheduleRunGetDistinctManyRow, error)
 	SchedulerScheduleRunsDeleteByJobKeyScheduleKey(context.Context, SchedulerScheduleRunsDeleteByJobKeyScheduleKeyParams) error
 }
