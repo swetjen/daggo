@@ -1,5 +1,18 @@
 # Changelog
 
+### Unreleased
+- Added an unauthenticated `GET /healthz` endpoint. It returns `200` with a small JSON body (overall status, database reachability, scheduler state, draining flag) and `503` when the database is unreachable or the scheduler is enabled but not alive. It needs no bearer token when `DAGGO_ADMIN_SECRET_KEY` is set and is served when `DAGGO_DISABLE_UI=true`.
+- Added graceful shutdown on `SIGTERM` and `SIGINT` for `daggo.Run(...)`, `daggo.RunRegistry(...)`, and `daggo.RunDefinitions(...)`. The signal starts the existing deploy drain: new runs are refused, the scheduler stops creating runs, in-flight runs get `DEPLOY_DRAIN_GRACE_SECONDS` to finish, HTTP shuts down, and the process exits `0`. A second signal ends the grace period immediately. Previously these signals killed the server at once and left its runs in `running`.
+- Changed the end of the drain grace period, for both the signal and the `DEPLOY_LOCK_PATH` lock file: runs still in flight are now stored with status `failed`, error message `interrupted by shutdown`, and a `run_interrupted` event, and their worker processes are terminated instead of being left running after the server exits. No new run status was added.
+- Changed subprocess workers to run in their own process group, so a signal sent to the server's process group (for example Ctrl+C in a terminal) no longer reaches workers directly, and terminating a run also terminates processes its worker spawned.
+- Changed `RUN_MAX_CONCURRENT_RUNS` / `cfg.Execution.MaxConcurrentRuns` to apply in `subprocess` mode, where it was ignored. It now caps the number of concurrent worker processes; further runs wait in arrival order, record a `run_worker_waiting` event, and start as slots free up.
+- Changed the default run concurrency so existing subprocess deployments do not become serial. Unset now means `8` in `subprocess` mode and `1` in `in_process` mode; `daggo.DefaultConfig()` returns `0` (unset) for `Execution.MaxConcurrentRuns` instead of `1`. An explicitly set value is honored, so a deployment that already sets `RUN_MAX_CONCURRENT_RUNS=1` in `subprocess` mode now runs one worker at a time. `.env.example` used to ship that line; remove it from any `.env` copied from the template unless serial execution is intended.
+- Added a PostgreSQL advisory lock around schema creation and startup migrations, so processes starting at the same time against an empty schema all succeed. Each migration is now applied and recorded in one transaction, and a process that finds the schema up to date starts without taking the lock. SQLite is unchanged.
+- Fixed run retention never purging `scheduler_schedule_runs`. With `RUN_RETENTION_DAYS` set, scheduler schedule-run records older than the window are purged once the run they created is gone, alongside runs, run steps, and run events. Runs that have not finished are never purged.
+- Changed the admin bearer check to compare tokens in constant time with `crypto/subtle`.
+- Added `SchedulerScheduleRunGetManyForRetentionPurge` to the `db.Store` interface; custom `db.Store` implementations need the new method.
+- Added `DAGGO_TEST_POSTGRES_DSN` for the PostgreSQL-only tests, which skip when it is unset.
+
 ## v0.6.3 - 2026-06-18
 - Raised Go security dependency floors for `golang.org/x/net`, `google.golang.org/grpc`, related `golang.org/x/*` modules, and the Go toolchain patch level.
 

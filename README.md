@@ -217,7 +217,26 @@ Relevant execution settings:
 - `cfg.Execution.MaxConcurrentRuns`
 - `cfg.Execution.MaxConcurrentSteps`
 
-Because the active run lives in a separate worker process, the web server can restart or roll forward independently without tying run execution to a request-serving goroutine. DAGGO is also designed for deploy-drain coordination so new web code can come up without immediately breaking active workers. We plan to add additional daemon and runner configurations later.
+`cfg.Execution.MaxConcurrentRuns` (`RUN_MAX_CONCURRENT_RUNS`) caps how many runs execute at once in both modes. In `subprocess` mode it is the number of worker processes; further runs wait in arrival order and start as slots free up, and a waiting run records a `run_worker_waiting` event. Leave it unset (`0`) to use the default for the mode: `8` in `subprocess` mode and `1` in `in_process` mode. A value you set is always honored, so `1` means strictly serial execution.
+
+Because the active run lives in a separate worker process, run execution is not tied to a request-serving goroutine. DAGGO is also designed for deploy-drain coordination so new web code can come up without immediately breaking active workers. We plan to add additional daemon and runner configurations later.
+
+### Shutdown
+
+When DAGGO owns the process (`daggo.Run`, `daggo.RunRegistry`, `daggo.RunDefinitions`), `SIGTERM` and `SIGINT` start a graceful drain, the same one the deploy lock file starts:
+
+1. New runs are refused and the scheduler and queue loaders stop creating runs. `/healthz` keeps answering `200` and reports `"draining": true`.
+2. Runs that are in flight, or already waiting for a slot, get `cfg.Deploy.DrainGraceSeconds` (`DEPLOY_DRAIN_GRACE_SECONDS`, default `900`) to finish. The server shuts down as soon as they have.
+3. When the grace period ends first, the remaining worker processes are terminated and every unfinished run is stored with status `failed`, error message `interrupted by shutdown`, and a `run_interrupted` event. Nothing is left in `running`.
+4. The HTTP server shuts down and `Run` returns `nil`, so the process exits `0`.
+
+Sending the signal a second time ends the grace period immediately.
+
+Set `DEPLOY_DRAIN_GRACE_SECONDS` below the time your platform waits before it force-kills the process (for example the container stop timeout). A process that is force-killed cannot record anything, and its runs stay in `running`.
+
+Worker processes run in their own process group, so a signal delivered to the server's process group, such as Ctrl+C in a terminal, reaches only the server. A supervisor that signals every process in the service at once, such as systemd with its default `KillMode=control-group`, still ends workers immediately; use `KillMode=mixed` there.
+
+Embedded apps that use `daggo.Open(...)` own their process and its signals; DAGGO installs no signal handlers in that mode.
 
 The same application binary has two runtime modes:
 
@@ -394,7 +413,7 @@ cfg.Retention.RunDays = 30
 Available config areas:
 
 - `cfg.Admin.Port`: web admin / RPC listen port.
-- `cfg.Admin.SecretKey`: optional bearer secret for `/rpc/` and `/rpc/docs/`.
+- `cfg.Admin.SecretKey`: optional bearer secret for `/rpc/` and `/rpc/docs/`. `/healthz` is never guarded.
 - `cfg.DisableUI`: disable the embedded admin UI while keeping RPC/docs enabled.
 - `cfg.Database`: database driver and connection settings.
 - `cfg.Execution`: queue size, execution mode, run concurrency, step concurrency.
@@ -435,7 +454,24 @@ At startup, DAGGO will:
 4. run embedded up-migrations automatically
 5. use PostgreSQL for jobs, runs, scheduler state, and events
 
+Schema creation and migrations run under a PostgreSQL advisory lock scoped to the schema name, so several processes can start at the same time against an empty schema. A process that finds the schema already up to date starts without taking the lock.
+
 The PostgreSQL runtime details and remaining limitations are documented in [docs/POSTGRES_RUNTIME_SPEC.md](docs/POSTGRES_RUNTIME_SPEC.md).
+
+### Health Check
+
+`GET /healthz` reports whether the runtime is healthy. It needs no bearer token, even when `cfg.Admin.SecretKey` is set, and it is served when `cfg.DisableUI` is `true`.
+
+```json
+{
+  "status": "ok",
+  "database": { "reachable": true },
+  "scheduler": { "enabled": true, "alive": true, "state": "running", "last_tick_at": "2026-09-28T19:40:01.123Z" },
+  "draining": false
+}
+```
+
+It answers `200` when the database answers a ping and the scheduler, if enabled, is alive. It answers `503` with `"status": "unhealthy"` when the database is unreachable, or when the scheduler is enabled but its loop has stopped or has not ticked for three tick intervals (at least 30 seconds). During a drain it answers `200` with `"status": "draining"`.
 
 ### RPC Guard
 

@@ -90,7 +90,11 @@ Relevant execution settings:
 - `cfg.Execution.MaxConcurrentRuns`
 - `cfg.Execution.MaxConcurrentSteps`
 
-Because runs execute in a separate worker process, the web server can restart independently of the active runner instead of tying run execution to a request-serving goroutine. DAGGO’s deploy-drain support is intended to let new code roll out without immediately disrupting active workers. Additional daemon and runner configurations are planned.
+`cfg.Execution.MaxConcurrentRuns` caps how many runs execute at once. In `subprocess` mode it is the number of worker processes, and further runs wait in arrival order for a free slot. Left unset (`0`) it defaults to `8` in `subprocess` mode and `1` in `in_process` mode; a value you set is always honored.
+
+Because runs execute in a separate worker process, run execution is not tied to a request-serving goroutine. DAGGO’s deploy-drain support is intended to let new code roll out without immediately disrupting active workers. Additional daemon and runner configurations are planned.
+
+On `SIGTERM` or `SIGINT`, a server started with `daggo.Run(...)`, `daggo.RunRegistry(...)`, or `daggo.RunDefinitions(...)` drains: it stops creating runs, waits up to `cfg.Deploy.DrainGraceSeconds` for in-flight runs, then terminates remaining workers and stores unfinished runs as `failed` with the error message `interrupted by shutdown`. See the Shutdown section of the README.
 
 ### Worker-Safe Startup
 
