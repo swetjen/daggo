@@ -12,14 +12,14 @@ import (
 )
 
 type RunInsertInput struct {
-	JobID         int64
-	TriggeredBy   string
-	ParamsJSON    string
-	QueuedAt      string
-	ParentRunID   int64
-	RerunStepKey  string
-	ErrorMessage  string
-	EventPayload  map[string]any
+	JobID        int64
+	TriggeredBy  string
+	ParamsJSON   string
+	QueuedAt     string
+	ParentRunID  int64
+	RerunStepKey string
+	ErrorMessage string
+	EventPayload map[string]any
 }
 
 func InsertQueuedRun(ctx context.Context, queries db.Store, in RunInsertInput) (db.Run, int, error) {

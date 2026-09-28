@@ -40,6 +40,36 @@ type Scheduler struct {
 	cronParser cron.Parser
 	startOnce  sync.Once
 	deployLock *DeployLock
+
+	// healthMu guards the liveness fields below. They track wall-clock
+	// activity of the loop and are independent of nowFn.
+	healthMu            sync.Mutex
+	healthNowFn         func() time.Time
+	started             bool
+	stopped             bool
+	startedAt           time.Time
+	lastTickStartedAt   time.Time
+	lastTickCompletedAt time.Time
+}
+
+const (
+	SchedulerStateNotStarted = "not_started"
+	SchedulerStateRunning    = "running"
+	SchedulerStateStalled    = "stalled"
+	SchedulerStateStopped    = "stopped"
+
+	minSchedulerStaleAfter = 30 * time.Second
+)
+
+// SchedulerHealth is a point-in-time view of the scheduler loop.
+type SchedulerHealth struct {
+	// Alive is true while the loop is running and has ticked recently.
+	Alive bool
+	// State is one of the SchedulerState constants.
+	State string
+	// LastTickAt is when the most recent tick started or completed. It is
+	// zero before the first tick.
+	LastTickAt time.Time
 }
 
 func NewScheduler(queries db.Store, pool *sql.DB, enqueuer RunEnqueuer, opts SchedulerOptions) *Scheduler {
@@ -64,6 +94,7 @@ func NewScheduler(queries db.Store, pool *sql.DB, enqueuer RunEnqueuer, opts Sch
 		tickInterval:  tickInterval,
 		maxDuePerTick: maxDuePerTick,
 		nowFn:         time.Now,
+		healthNowFn:   time.Now,
 		deployLock:    opts.DeployLock,
 		cronParser: cron.NewParser(
 			cron.Minute |
@@ -84,13 +115,79 @@ func (s *Scheduler) Start(ctx context.Context) {
 		ctx = context.Background()
 	}
 	s.startOnce.Do(func() {
+		s.healthMu.Lock()
+		s.started = true
+		s.startedAt = s.healthNowFn()
+		s.healthMu.Unlock()
 		go s.loop(ctx)
 	})
+}
+
+// Health reports whether the scheduler loop is alive. The loop counts as
+// stalled when it has neither started nor completed a tick for three tick
+// intervals (at least 30 seconds), and as stopped once its context has ended.
+func (s *Scheduler) Health() SchedulerHealth {
+	if s == nil {
+		return SchedulerHealth{State: SchedulerStateNotStarted}
+	}
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+
+	lastTickAt := s.lastTickStartedAt
+	if s.lastTickCompletedAt.After(lastTickAt) {
+		lastTickAt = s.lastTickCompletedAt
+	}
+	health := SchedulerHealth{LastTickAt: lastTickAt}
+	switch {
+	case !s.started:
+		health.State = SchedulerStateNotStarted
+	case s.stopped:
+		health.State = SchedulerStateStopped
+	default:
+		lastActivity := lastTickAt
+		if lastActivity.IsZero() {
+			lastActivity = s.startedAt
+		}
+		if s.healthNowFn().Sub(lastActivity) > s.staleAfter() {
+			health.State = SchedulerStateStalled
+		} else {
+			health.State = SchedulerStateRunning
+			health.Alive = true
+		}
+	}
+	return health
+}
+
+func (s *Scheduler) staleAfter() time.Duration {
+	staleAfter := 3 * s.tickInterval
+	if staleAfter < minSchedulerStaleAfter {
+		staleAfter = minSchedulerStaleAfter
+	}
+	return staleAfter
+}
+
+func (s *Scheduler) recordTickStarted() {
+	s.healthMu.Lock()
+	s.lastTickStartedAt = s.healthNowFn()
+	s.healthMu.Unlock()
+}
+
+func (s *Scheduler) recordTickCompleted() {
+	s.healthMu.Lock()
+	s.lastTickCompletedAt = s.healthNowFn()
+	s.healthMu.Unlock()
+}
+
+func (s *Scheduler) recordStopped() {
+	s.healthMu.Lock()
+	s.stopped = true
+	s.healthMu.Unlock()
 }
 
 func (s *Scheduler) loop(ctx context.Context) {
 	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
+	defer s.recordStopped()
 
 	s.runTick(ctx)
 	for {
@@ -107,6 +204,9 @@ func (s *Scheduler) runTick(ctx context.Context) {
 	if s == nil || s.queries == nil {
 		return
 	}
+	s.recordTickStarted()
+	defer s.recordTickCompleted()
+
 	startedAt := s.nowFn().UTC()
 	_ = s.upsertHeartbeat(ctx, startedAt, startedAt, time.Time{}, "")
 

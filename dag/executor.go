@@ -29,9 +29,29 @@ type Executor struct {
 	workerBinary  string
 	workerCommand []string
 
+	// processesMu guards every field in this block.
 	processesMu sync.Mutex
 	processes   map[int64]runProcess
 	terminated  map[int64]struct{}
+	// interrupted holds runs whose worker was killed by a shutdown, with the
+	// reason to record once the worker has exited.
+	interrupted map[int64]string
+	// subprocessPending holds runs waiting for a free worker slot, in FIFO
+	// order. subprocessSlots counts slots in use: a slot is claimed before
+	// the worker launches and released after its exit has been recorded.
+	subprocessPending []int64
+	subprocessSlots   int
+	// inProcessActive holds runs currently executing on an in-process worker.
+	inProcessActive map[int64]struct{}
+	// stopped is set once active runs have been interrupted for shutdown;
+	// no run starts after that.
+	stopped       bool
+	stoppedReason string
+
+	// runCtx is the context in-process runs execute under. It is cancelled
+	// when active runs are interrupted for shutdown.
+	runCtx    context.Context
+	runCancel context.CancelFunc
 
 	queue                 chan int64
 	once                  sync.Once
@@ -50,17 +70,37 @@ const (
 	ExecutionModeSubprocess = "subprocess"
 )
 
+const (
+	// RunInterruptedReason is the error message recorded on a run, and on
+	// its unfinished steps, when a shutdown ends the run before it finished.
+	// Interrupted runs are stored with status "failed".
+	RunInterruptedReason = "interrupted by shutdown"
+	// RunInterruptedEventType is the run event emitted for an interrupted run.
+	RunInterruptedEventType = "run_interrupted"
+	// StepInterruptedEventType is the run event emitted for a step that was
+	// executing when its run was interrupted.
+	StepInterruptedEventType = "step_interrupted"
+	// RunWorkerWaitingEventType is the run event emitted when a run has to
+	// wait for a free worker slot in subprocess mode.
+	RunWorkerWaitingEventType = "run_worker_waiting"
+)
+
 func NewExecutor(queries db.Store, pool *sql.DB, registry *Registry, queueSize int) *Executor {
 	if queueSize <= 0 {
 		queueSize = 128
 	}
+	runCtx, runCancel := context.WithCancel(context.Background())
 	executor := &Executor{
-		queries:    queries,
-		pool:       pool,
-		registry:   registry,
-		queue:      make(chan int64, queueSize),
-		processes:  make(map[int64]runProcess),
-		terminated: make(map[int64]struct{}),
+		queries:         queries,
+		pool:            pool,
+		registry:        registry,
+		queue:           make(chan int64, queueSize),
+		processes:       make(map[int64]runProcess),
+		terminated:      make(map[int64]struct{}),
+		interrupted:     make(map[int64]string),
+		inProcessActive: make(map[int64]struct{}),
+		runCtx:          runCtx,
+		runCancel:       runCancel,
 	}
 	executor.SetExecutionMode(ExecutionModeInProcess)
 	executor.SetWorkerCommand("daggo-worker")
@@ -190,8 +230,12 @@ func (e *Executor) EnqueueRun(runID int64) {
 	if e == nil || runID <= 0 {
 		return
 	}
+	if stopped, reason := e.stoppedState(); stopped {
+		_ = e.markRunInterrupted(context.Background(), runID, reason)
+		return
+	}
 	if e.ExecutionMode() == ExecutionModeSubprocess {
-		e.launchRunSubprocess(context.Background(), runID)
+		e.enqueueSubprocessRun(runID)
 		return
 	}
 	e.once.Do(func() {
@@ -203,13 +247,111 @@ func (e *Executor) EnqueueRun(runID int64) {
 	e.queue <- runID
 }
 
-func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) {
+func (e *Executor) stoppedState() (bool, string) {
+	e.processesMu.Lock()
+	defer e.processesMu.Unlock()
+	return e.stopped, e.stoppedReason
+}
+
+// enqueueSubprocessRun queues a run for a worker process. The run starts
+// immediately when a slot is free; otherwise it waits, in arrival order, until
+// a running worker exits.
+func (e *Executor) enqueueSubprocessRun(runID int64) {
+	e.processesMu.Lock()
+	e.subprocessPending = append(e.subprocessPending, runID)
+	e.processesMu.Unlock()
+
+	e.dispatchPendingSubprocessRuns()
+
+	e.processesMu.Lock()
+	position := 0
+	for idx, pendingID := range e.subprocessPending {
+		if pendingID == runID {
+			position = idx + 1
+			break
+		}
+	}
+	e.processesMu.Unlock()
+	if position == 0 {
+		return
+	}
+	_ = e.addEvent(context.Background(), runID, "", RunWorkerWaitingEventType, "info", "waiting for a free worker slot", map[string]any{
+		"max_concurrent_runs": e.RunMaxConcurrentRuns(),
+		"queue_position":      position,
+	})
+}
+
+// dispatchPendingSubprocessRuns starts waiting runs while worker slots are
+// free.
+func (e *Executor) dispatchPendingSubprocessRuns() {
+	for {
+		e.processesMu.Lock()
+		if e.stopped || len(e.subprocessPending) == 0 || e.subprocessSlots >= e.RunMaxConcurrentRuns() {
+			e.processesMu.Unlock()
+			return
+		}
+		runID := e.subprocessPending[0]
+		e.subprocessPending = e.subprocessPending[1:]
+		e.subprocessSlots++
+		e.processesMu.Unlock()
+
+		if e.startClaimedSubprocessRun(runID) {
+			// The worker's wait goroutine releases the slot.
+			continue
+		}
+		e.processesMu.Lock()
+		if e.subprocessSlots > 0 {
+			e.subprocessSlots--
+		}
+		e.processesMu.Unlock()
+	}
+}
+
+// startClaimedSubprocessRun launches the worker for a run that already holds
+// a slot. It reports whether a worker process was started.
+func (e *Executor) startClaimedSubprocessRun(runID int64) bool {
+	ctx := context.Background()
+	if run, err := e.queries.RunGetByID(ctx, runID); err == nil && isTerminalExecutionStatus(run.Status) {
+		// Canceled or otherwise finished while it waited for a slot.
+		return false
+	}
+	return e.launchRunSubprocess(ctx, runID)
+}
+
+// releaseSubprocessSlot frees the slot held by an exited worker and starts the
+// next waiting run, if any.
+func (e *Executor) releaseSubprocessSlot() {
+	e.processesMu.Lock()
+	if e.subprocessSlots > 0 {
+		e.subprocessSlots--
+	}
+	e.processesMu.Unlock()
+	e.dispatchPendingSubprocessRuns()
+}
+
+func (e *Executor) removePendingSubprocessRun(runID int64) bool {
+	e.processesMu.Lock()
+	defer e.processesMu.Unlock()
+	for idx, pendingID := range e.subprocessPending {
+		if pendingID == runID {
+			e.subprocessPending = append(e.subprocessPending[:idx], e.subprocessPending[idx+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) bool {
+	if stopped, reason := e.stoppedState(); stopped {
+		_ = e.markRunInterrupted(ctx, runID, reason)
+		return false
+	}
 	binaryPath := e.workerBinaryPath()
 	if strings.TrimSpace(binaryPath) == "" {
 		message := "worker binary path is empty"
 		slog.Error("daggo: failed to start run worker", "run_id", runID, "err", message)
 		_ = e.failRun(ctx, runID, message)
-		return
+		return false
 	}
 
 	args := append(e.workerCommandArgs(), "--run-id", strconv.FormatInt(runID, 10))
@@ -218,6 +360,7 @@ func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) {
 	cmd.Stderr = io.Discard
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
+	configureWorkerProcess(cmd)
 
 	if err := cmd.Start(); err != nil {
 		message := fmt.Sprintf("failed to start worker process: %v", err)
@@ -228,7 +371,7 @@ func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) {
 			"error":  err.Error(),
 		})
 		_ = e.failRun(ctx, runID, message)
-		return
+		return false
 	}
 
 	pid := cmd.Process.Pid
@@ -249,9 +392,14 @@ func (e *Executor) launchRunSubprocess(ctx context.Context, runID int64) {
 	})
 
 	go e.waitForRunSubprocess(runID, pid, cmd)
+	return true
 }
 
 func (e *Executor) waitForRunSubprocess(runID int64, pid int, cmd *exec.Cmd) {
+	// Release the slot only after the exit has been recorded, so an idle
+	// executor means every finished worker is fully accounted for.
+	defer e.releaseSubprocessSlot()
+
 	waitErr := cmd.Wait()
 
 	e.processesMu.Lock()
@@ -259,6 +407,10 @@ func (e *Executor) waitForRunSubprocess(runID int64, pid int, cmd *exec.Cmd) {
 	_, wasTerminated := e.terminated[runID]
 	if wasTerminated {
 		delete(e.terminated, runID)
+	}
+	interruptReason, wasInterrupted := e.interrupted[runID]
+	if wasInterrupted {
+		delete(e.interrupted, runID)
 	}
 	e.processesMu.Unlock()
 
@@ -281,6 +433,10 @@ func (e *Executor) waitForRunSubprocess(runID int64, pid int, cmd *exec.Cmd) {
 
 	if wasTerminated {
 		_ = e.markRunCanceled(context.Background(), runID, "terminated by operator")
+		return
+	}
+	if wasInterrupted {
+		_ = e.markRunInterrupted(context.Background(), runID, interruptReason)
 		return
 	}
 
@@ -315,6 +471,7 @@ func (e *Executor) TerminateRun(runID int64) error {
 	}
 	e.processesMu.Unlock()
 	if !ok {
+		e.removePendingSubprocessRun(runID)
 		run, err := e.queries.RunGetByID(context.Background(), runID)
 		if err == nil {
 			status := normalizeExecutionStatus(run.Status)
@@ -325,12 +482,7 @@ func (e *Executor) TerminateRun(runID int64) error {
 		return fmt.Errorf("run %d is not running in this process", runID)
 	}
 
-	proc, err := os.FindProcess(process.pid)
-	if err != nil {
-		e.clearTerminated(runID)
-		return err
-	}
-	if err := proc.Kill(); err != nil {
+	if err := killWorkerProcess(process.pid); err != nil {
 		e.clearTerminated(runID)
 		return err
 	}
@@ -455,11 +607,36 @@ func (e *Executor) loop() {
 		e.activeRuns.Add(1)
 		func() {
 			defer e.activeRuns.Add(-1)
-			if err := e.executeRun(context.Background(), runID); err != nil {
+			if !e.beginInProcessRun(runID) {
+				return
+			}
+			defer e.endInProcessRun(runID)
+			if err := e.executeRun(e.runCtx, runID); err != nil {
 				slog.Error("daggo: run execution failed", "run_id", runID, "err", err)
 			}
 		}()
 	}
+}
+
+// beginInProcessRun records a run as executing. It reports false, and marks
+// the run interrupted, when the executor has already been stopped.
+func (e *Executor) beginInProcessRun(runID int64) bool {
+	e.processesMu.Lock()
+	if e.stopped {
+		reason := e.stoppedReason
+		e.processesMu.Unlock()
+		_ = e.markRunInterrupted(context.Background(), runID, reason)
+		return false
+	}
+	e.inProcessActive[runID] = struct{}{}
+	e.processesMu.Unlock()
+	return true
+}
+
+func (e *Executor) endInProcessRun(runID int64) {
+	e.processesMu.Lock()
+	delete(e.inProcessActive, runID)
+	e.processesMu.Unlock()
 }
 
 func (e *Executor) ExecuteRun(ctx context.Context, runID int64) error {
@@ -474,7 +651,7 @@ func (e *Executor) IsIdle() bool {
 		return true
 	}
 	if e.ExecutionMode() == ExecutionModeSubprocess {
-		return e.ActiveRuns() == 0
+		return e.ActiveRuns() == 0 && e.QueueDepth() == 0
 	}
 	return e.activeRuns.Load() == 0 && len(e.queue) == 0
 }
@@ -486,7 +663,7 @@ func (e *Executor) ActiveRuns() int64 {
 	if e.ExecutionMode() == ExecutionModeSubprocess {
 		e.processesMu.Lock()
 		defer e.processesMu.Unlock()
-		return int64(len(e.processes))
+		return int64(e.subprocessSlots)
 	}
 	return e.activeRuns.Load()
 }
@@ -496,7 +673,9 @@ func (e *Executor) QueueDepth() int {
 		return 0
 	}
 	if e.ExecutionMode() == ExecutionModeSubprocess {
-		return 0
+		e.processesMu.Lock()
+		defer e.processesMu.Unlock()
+		return len(e.subprocessPending)
 	}
 	return len(e.queue)
 }
@@ -587,8 +766,10 @@ func (e *Executor) executeRun(ctx context.Context, runID int64) error {
 		status = "failed"
 	}
 
+	// A run that was canceled or interrupted while its steps executed is
+	// already terminal; do not overwrite that outcome.
 	freshRun, err := e.queries.RunGetByID(ctx, run.ID)
-	if err == nil && normalizeExecutionStatus(freshRun.Status) == "canceled" {
+	if err == nil && isTerminalExecutionStatus(freshRun.Status) {
 		return nil
 	}
 

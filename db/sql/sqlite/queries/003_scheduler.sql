@@ -74,6 +74,18 @@ RETURNING id, job_key, schedule_key, scheduled_for, run_key, triggered_by, creat
 DELETE FROM scheduler_schedule_runs
 WHERE id = ?;
 
+-- name: SchedulerScheduleRunGetManyForRetentionPurge :many
+SELECT ssr.id
+FROM scheduler_schedule_runs ssr
+WHERE ssr.scheduled_for < ?
+  AND NOT EXISTS (
+    SELECT 1
+    FROM runs r
+    WHERE r.run_key = ssr.run_key
+  )
+ORDER BY ssr.scheduled_for, ssr.id
+LIMIT ?;
+
 -- name: SchedulerScheduleRunGetDistinctMany :many
 SELECT DISTINCT job_key, schedule_key
 FROM scheduler_schedule_runs

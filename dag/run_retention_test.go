@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"testing"
 	"time"
 
@@ -368,4 +370,168 @@ func formatRetentionTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func TestRunRetentionSevenDaysPurgesExactlyTheOldRows(t *testing.T) {
+	t.Parallel()
+
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	assertRetentionSevenDayPurge(t, queries, pool)
+}
+
+func TestRunRetentionSevenDaysPurgesExactlyTheOldRowsPostgres(t *testing.T) {
+	dsn := os.Getenv(db.TestPostgresDSNEnv)
+	if dsn == "" {
+		t.Skipf("%s is not set", db.TestPostgresDSNEnv)
+	}
+
+	queries, pool, cleanup, err := db.NewTestPostgres(dsn)
+	if err != nil {
+		t.Fatalf("open postgres test db: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	assertRetentionSevenDayPurge(t, queries, pool)
+}
+
+// assertRetentionSevenDayPurge seeds rows on both sides of a 7 day retention
+// window and asserts that one purge removes exactly the old ones from runs,
+// run steps, run events, and scheduler schedule-run records.
+func assertRetentionSevenDayPurge(t *testing.T, queries db.Store, pool *sql.DB) {
+	t.Helper()
+
+	ctx := context.Background()
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	days := func(n int) time.Time { return now.AddDate(0, 0, -n) }
+
+	jobID := createRetentionJob(t, ctx, queries, "retention_seven_day_job")
+
+	// Old terminal runs: every one of these must be purged.
+	oldSuccess := createRetentionRun(t, ctx, queries, jobID, "success", days(8))
+	oldFailed := createRetentionRun(t, ctx, queries, jobID, "failed", days(10))
+	oldCanceled := createRetentionRun(t, ctx, queries, jobID, "canceled", days(30))
+	justOutside := createRetentionRun(t, ctx, queries, jobID, "success", days(7).Add(-time.Minute))
+
+	// Runs inside the window, and runs that never finished: all must remain.
+	justInside := createRetentionRun(t, ctx, queries, jobID, "success", days(7).Add(time.Minute))
+	recentFailed := createRetentionRun(t, ctx, queries, jobID, "failed", days(1))
+	oldRunning := createRetentionRunWithState(t, ctx, queries, jobID, "running", days(20), time.Time{})
+	oldQueued := createRetentionRunWithState(t, ctx, queries, jobID, "queued", time.Time{}, time.Time{})
+
+	purgedRuns := []int64{oldSuccess, oldFailed, oldCanceled, justOutside}
+	keptRuns := []int64{justInside, recentFailed, oldRunning, oldQueued}
+
+	runKey := func(runID int64) string {
+		t.Helper()
+		row, err := queries.RunGetByID(ctx, runID)
+		if err != nil {
+			t.Fatalf("load run %d: %v", runID, err)
+		}
+		return row.RunKey
+	}
+	claim := func(scheduledFor time.Time, key string) int64 {
+		t.Helper()
+		rows, err := queries.SchedulerScheduleRunsCreateIfAbsent(ctx, db.SchedulerScheduleRunsCreateIfAbsentParams{
+			JobKey:       "retention_seven_day_job",
+			ScheduleKey:  "every_minute",
+			ScheduledFor: scheduledFor.UTC().Format(time.RFC3339Nano),
+			RunKey:       key,
+			TriggeredBy:  "scheduler:every_minute",
+		})
+		if err != nil {
+			t.Fatalf("create schedule run: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("expected one schedule run claim, got %d", len(rows))
+		}
+		return rows[0].ID
+	}
+
+	purgedClaims := []int64{
+		claim(days(8), runKey(oldSuccess)),
+		claim(days(10), runKey(oldFailed)),
+		claim(days(7).Add(-time.Minute), runKey(justOutside)),
+		// A claim whose run was never recorded.
+		claim(days(9), ""),
+	}
+	keptClaims := []int64{
+		claim(days(7).Add(time.Minute), runKey(justInside)),
+		claim(days(1), runKey(recentFailed)),
+		claim(days(2), ""),
+		// Old claim, but its run is still running and is kept.
+		claim(days(20), runKey(oldRunning)),
+	}
+
+	retention := NewRunRetention(queries, pool, RunRetentionOptions{RunDays: 7, BatchSize: 3})
+	retention.nowFn = func() time.Time { return now }
+
+	result, err := retention.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run retention once: %v", err)
+	}
+	if result.DeletedRuns != int64(len(purgedRuns)) {
+		t.Fatalf("expected %d deleted runs, got %d", len(purgedRuns), result.DeletedRuns)
+	}
+	if result.DeletedScheduleRuns != int64(len(purgedClaims)) {
+		t.Fatalf("expected %d deleted schedule runs, got %d", len(purgedClaims), result.DeletedScheduleRuns)
+	}
+
+	assertRetentionIDs(t, ctx, pool, "runs", "SELECT id FROM runs ORDER BY id", keptRuns)
+	assertRetentionIDs(t, ctx, pool, "run_steps", "SELECT DISTINCT run_id FROM run_steps ORDER BY run_id", keptRuns)
+	assertRetentionIDs(t, ctx, pool, "run_events", "SELECT DISTINCT run_id FROM run_events ORDER BY run_id", keptRuns)
+	assertRetentionIDs(t, ctx, pool, "scheduler_schedule_runs", "SELECT id FROM scheduler_schedule_runs ORDER BY id", keptClaims)
+
+	for _, runID := range keptRuns {
+		row, err := queries.RunGetByID(ctx, runID)
+		if err != nil {
+			t.Fatalf("expected run %d to remain: %v", runID, err)
+		}
+		if runID == oldRunning && row.Status != "running" {
+			t.Fatalf("expected running run to be untouched, got status %q", row.Status)
+		}
+	}
+
+	// A second pass has nothing left to do.
+	second, err := retention.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("run retention twice: %v", err)
+	}
+	if second.DeletedRuns != 0 || second.DeletedQueueItems != 0 || second.DeletedScheduleRuns != 0 {
+		t.Fatalf("expected second purge to delete nothing, got %+v", second)
+	}
+}
+
+func assertRetentionIDs(t *testing.T, ctx context.Context, pool *sql.DB, table string, query string, want []int64) {
+	t.Helper()
+
+	rows, err := pool.QueryContext(ctx, query)
+	if err != nil {
+		t.Fatalf("query %s: %v", table, err)
+	}
+	defer rows.Close()
+
+	got := make([]int64, 0, len(want))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan %s: %v", table, err)
+		}
+		got = append(got, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows %s: %v", table, err)
+	}
+
+	sorted := append([]int64(nil), want...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	if fmt.Sprint(got) != fmt.Sprint(sorted) {
+		t.Fatalf("%s: remaining ids = %v, want %v", table, got, sorted)
+	}
 }

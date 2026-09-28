@@ -70,3 +70,76 @@ func waitFor(t *testing.T, maxWait time.Duration, check func() bool) {
 	}
 	t.Fatalf("condition not met within %s", maxWait)
 }
+
+func TestDeployLockBeginDrainStartsDrainWithoutLockFile(t *testing.T) {
+	t.Parallel()
+
+	lock := NewDeployLock(filepath.Join(t.TempDir(), "WILL_DEPLOY"), time.Second, 40*time.Millisecond)
+
+	select {
+	case <-lock.DrainStarted():
+		t.Fatalf("drain reported as started before it began")
+	default:
+	}
+	if lock.IsDraining() || lock.ShouldForceExit() {
+		t.Fatalf("expected no drain before BeginDrain")
+	}
+
+	if !lock.BeginDrain("signal terminated") {
+		t.Fatalf("expected BeginDrain to start the drain")
+	}
+	if lock.BeginDrain("signal terminated") {
+		t.Fatalf("expected a second BeginDrain to report the drain was already in progress")
+	}
+
+	select {
+	case <-lock.DrainStarted():
+	default:
+		t.Fatalf("expected DrainStarted to be closed once the drain began")
+	}
+	if !lock.IsDraining() {
+		t.Fatalf("expected draining=true after BeginDrain")
+	}
+	if got := lock.DrainReason(); got != "signal terminated" {
+		t.Fatalf("drain reason = %q", got)
+	}
+	if lock.ShouldForceExit() {
+		t.Fatalf("expected the grace period to apply after BeginDrain")
+	}
+	waitFor(t, 500*time.Millisecond, func() bool {
+		return lock.ShouldForceExit()
+	})
+}
+
+func TestDeployLockForceExitEndsGracePeriodImmediately(t *testing.T) {
+	t.Parallel()
+
+	lock := NewDeployLock(filepath.Join(t.TempDir(), "WILL_DEPLOY"), time.Second, time.Hour)
+	lock.BeginDrain("signal terminated")
+	if lock.ShouldForceExit() {
+		t.Fatalf("expected the grace period to apply before ForceExit")
+	}
+
+	lock.ForceExit("signal terminated")
+	lock.ForceExit("signal terminated")
+
+	select {
+	case <-lock.ForceExitRequested():
+	default:
+		t.Fatalf("expected ForceExitRequested to be closed")
+	}
+	if !lock.ShouldForceExit() {
+		t.Fatalf("expected ForceExit to end the grace period")
+	}
+}
+
+func TestDeployLockForceExitWithoutDrainStartsOne(t *testing.T) {
+	t.Parallel()
+
+	lock := NewDeployLock("", time.Second, time.Hour)
+	lock.ForceExit("signal terminated")
+
+	if !lock.IsDraining() || !lock.ShouldForceExit() {
+		t.Fatalf("expected ForceExit to start a drain and end its grace period")
+	}
+}

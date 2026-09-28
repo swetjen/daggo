@@ -556,6 +556,13 @@ func (s *PostgresStore) SchedulerScheduleRunDeleteByID(ctx context.Context, id i
 	return s.queries.SchedulerScheduleRunDeleteByID(ctx, id)
 }
 
+func (s *PostgresStore) SchedulerScheduleRunGetManyForRetentionPurge(ctx context.Context, arg SchedulerScheduleRunGetManyForRetentionPurgeParams) ([]int64, error) {
+	return s.queries.SchedulerScheduleRunGetManyForRetentionPurge(ctx, postgresgen.SchedulerScheduleRunGetManyForRetentionPurgeParams{
+		ScheduledFor: mustParseStoredTime(arg.ScheduledFor),
+		Limit:        int32(arg.Limit),
+	})
+}
+
 func (s *PostgresStore) SchedulerScheduleRunGetDistinctMany(ctx context.Context) ([]SchedulerScheduleRunGetDistinctManyRow, error) {
 	rows, err := s.queries.SchedulerScheduleRunGetDistinctMany(ctx)
 	if err != nil {

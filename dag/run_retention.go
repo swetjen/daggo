@@ -21,10 +21,11 @@ type RunRetentionOptions struct {
 }
 
 type RunRetentionResult struct {
-	RunDays           int
-	Cutoff            string
-	DeletedRuns       int64
-	DeletedQueueItems int64
+	RunDays             int
+	Cutoff              string
+	DeletedRuns         int64
+	DeletedQueueItems   int64
+	DeletedScheduleRuns int64
 }
 
 type RunRetention struct {
@@ -152,7 +153,26 @@ func (r *RunRetention) RunOnce(ctx context.Context) (RunRetentionResult, error) 
 			}
 		}
 
-		if len(runIDs) == 0 && len(queueItemIDs) == 0 {
+		// Scheduler claims are purged once they are past the cutoff and the
+		// run they created is gone, so a claim never outlives its run's
+		// history and never disappears while that run is still kept.
+		scheduleRunIDs, err := store.SchedulerScheduleRunGetManyForRetentionPurge(ctx, db.SchedulerScheduleRunGetManyForRetentionPurgeParams{
+			ScheduledFor: cutoff,
+			Limit:        r.batchSize,
+		})
+		if err != nil {
+			_ = tx.Rollback()
+			return result, err
+		}
+
+		for _, scheduleRunID := range scheduleRunIDs {
+			if err := store.SchedulerScheduleRunDeleteByID(ctx, scheduleRunID); err != nil {
+				_ = tx.Rollback()
+				return result, err
+			}
+		}
+
+		if len(runIDs) == 0 && len(queueItemIDs) == 0 && len(scheduleRunIDs) == 0 {
 			_ = tx.Rollback()
 			return result, nil
 		}
@@ -163,6 +183,7 @@ func (r *RunRetention) RunOnce(ctx context.Context) (RunRetentionResult, error) 
 
 		result.DeletedRuns += int64(len(runIDs))
 		result.DeletedQueueItems += int64(len(queueItemIDs))
+		result.DeletedScheduleRuns += int64(len(scheduleRunIDs))
 	}
 }
 
@@ -171,7 +192,7 @@ func (r *RunRetention) logResult(result RunRetentionResult, err error) {
 		slog.Error("daggo: run retention purge failed", "error", err)
 		return
 	}
-	if result.DeletedRuns == 0 && result.DeletedQueueItems == 0 {
+	if result.DeletedRuns == 0 && result.DeletedQueueItems == 0 && result.DeletedScheduleRuns == 0 {
 		return
 	}
 	slog.Info(
@@ -180,5 +201,6 @@ func (r *RunRetention) logResult(result RunRetentionResult, err error) {
 		"cutoff", result.Cutoff,
 		"deleted_runs", result.DeletedRuns,
 		"deleted_queue_items", result.DeletedQueueItems,
+		"deleted_schedule_runs", result.DeletedScheduleRuns,
 	)
 }

@@ -12,9 +12,11 @@ import (
 	"github.com/swetjen/daggo/db"
 	"github.com/swetjen/daggo/deps"
 	"github.com/swetjen/daggo/handlers"
+	"github.com/swetjen/daggo/handlers/health"
 	"github.com/swetjen/daggo/middleware"
 	"github.com/swetjen/daggo/queue"
 	"github.com/swetjen/virtuous"
+	"github.com/swetjen/virtuous/httpapi"
 	"github.com/swetjen/virtuous/rpc"
 )
 
@@ -72,6 +74,9 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router, application *deps.Deps
 		guardedRPC.ServeHTTP(w, req)
 	}))
 	mux.Handle("/rpc/", guardedRPC)
+	// The health endpoint is never guarded and is served with or without
+	// the UI, so load balancers and orchestrators can always reach it.
+	mux.Handle(health.Path, newHealthRouter(application))
 	if application != nil && application.Queues != nil {
 		for _, definition := range application.Queues.Queues() {
 			if strings.TrimSpace(definition.RoutePath) == "" || definition.RouteHandler() == nil {
@@ -88,6 +93,20 @@ func newHandler(cfg config.Config, rpcRouter *rpc.Router, application *deps.Deps
 		virtuous.WithAllowedOrigins(cfg.AllowedOrigins...),
 	)(mux)
 	return handler
+}
+
+func newHealthRouter(application *deps.Deps) http.Handler {
+	handlerSet := health.New(application)
+	router := httpapi.NewRouter()
+	router.HandleTyped(
+		"GET "+health.Path,
+		httpapi.WrapFunc(handlerSet.Healthz, nil, health.Response{}, httpapi.HandlerMeta{
+			Service: "Health",
+			Method:  "Healthz",
+			Summary: "Report whether the database is reachable and the scheduler is alive.",
+		}),
+	)
+	return router
 }
 
 func guardRPCHandler(cfg config.Config, next http.Handler) http.Handler {

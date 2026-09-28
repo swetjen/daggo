@@ -42,12 +42,14 @@ export DAGGO_POSTGRES_SSLMODE=require
 
 When PostgreSQL is selected, DAGGO startup does the following:
 
-1. Connects to the configured PostgreSQL database.
-2. Creates the configured schema if it does not exist.
-3. Reconnects with `search_path` set to `<daggo_schema>,public`.
-4. Creates the DAGGO migration ledger table if needed.
-5. Runs embedded up-migrations automatically.
+1. Connects to the configured PostgreSQL database with `search_path` set to `<daggo_schema>,public`.
+2. Checks the DAGGO migration ledger. When every embedded migration is already recorded, startup continues at step 6.
+3. Takes a PostgreSQL advisory lock scoped to the schema name, on a separate connection.
+4. Creates the configured schema and the DAGGO migration ledger table if they do not exist.
+5. Runs pending embedded up-migrations, each one applied and recorded in a single transaction, then releases the lock.
 6. Uses PostgreSQL for jobs, runs, scheduler state, and events.
+
+Processes that start at the same time against the same schema take turns at steps 3 to 5, so all of them succeed, including against an empty schema.
 
 This means the caller owns:
 
@@ -81,13 +83,11 @@ Runtime code uses a common `db.Store` boundary so SQLite and PostgreSQL can shar
 
 ## Current Gaps
 
-- PostgreSQL integration tests are not in place yet.
+- PostgreSQL integration tests cover concurrent startup migrations and run retention only, and run only when `DAGGO_TEST_POSTGRES_DSN` points at a throwaway server.
 - There is not yet a PostgreSQL URL-style config field; the runtime currently uses structured connection fields.
-- Migration locking for concurrent startup is not implemented yet.
 - Connection pool tuning is still minimal.
 
 ## Recommended Next Improvements
 
-1. Add disposable PostgreSQL integration tests covering migrations, job sync, run creation, and scheduler flows.
-2. Add migration locking so two DAGGO processes cannot race schema upgrades.
-3. Add optional PostgreSQL URL support if callers want to provide a single DSN instead of structured fields.
+1. Extend the disposable PostgreSQL integration tests to job sync, run creation, and scheduler flows.
+2. Add optional PostgreSQL URL support if callers want to provide a single DSN instead of structured fields.

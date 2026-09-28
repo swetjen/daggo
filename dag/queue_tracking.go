@@ -21,10 +21,10 @@ func RecordQueueStepMetadata(ctx context.Context, queries db.Store, queueMeta *R
 		return err
 	}
 	_, err = queries.QueueItemStepMetadataUpsert(ctx, db.QueueItemStepMetadataUpsertParams{
-		QueueItemID: queueMeta.QueueItemID,
-		JobID:       jobID,
-		RunID:       runID,
-		StepKey:     stepKey,
+		QueueItemID:  queueMeta.QueueItemID,
+		JobID:        jobID,
+		RunID:        runID,
+		StepKey:      stepKey,
 		MetadataJson: string(payload),
 	})
 	return err
