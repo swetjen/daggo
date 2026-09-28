@@ -102,9 +102,9 @@ func (r *Registry) SyncToDB(ctx context.Context, queries db.Store, pool *sql.DB)
 				return fmt.Errorf("load queue job %s/%s: %w", definition.Key, job.Key, err)
 			}
 			if _, err := qtx.QueueJobCreate(ctx, db.QueueJobCreateParams{
-				QueueID:    row.ID,
-				JobID:      jobRow.ID,
-				SortIndex:  int64(idx),
+				QueueID:   row.ID,
+				JobID:     jobRow.ID,
+				SortIndex: int64(idx),
 			}); err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("create queue job %s/%s: %w", definition.Key, job.Key, err)

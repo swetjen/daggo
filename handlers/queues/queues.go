@@ -82,20 +82,20 @@ type QueueLinkedRun struct {
 }
 
 type QueueItemDetail struct {
-	ID               int64                        `json:"id"`
-	QueueID          int64                        `json:"queue_id"`
-	QueueKey         string                       `json:"queue_key"`
-	QueueDisplayName string                       `json:"queue_display_name"`
-	QueueItemKey     string                       `json:"queue_item_key"`
-	PartitionKey     string                       `json:"partition_key"`
-	Status           string                       `json:"status"`
-	ExternalKey      string                       `json:"external_key"`
-	PayloadJSON      string                       `json:"payload_json"`
-	ErrorMessage     string                       `json:"error_message"`
-	QueuedAt         string                       `json:"queued_at"`
-	StartedAt        string                       `json:"started_at"`
-	CompletedAt      string                       `json:"completed_at"`
-	Metadata         map[string]map[string]any    `json:"metadata"`
+	ID               int64                     `json:"id"`
+	QueueID          int64                     `json:"queue_id"`
+	QueueKey         string                    `json:"queue_key"`
+	QueueDisplayName string                    `json:"queue_display_name"`
+	QueueItemKey     string                    `json:"queue_item_key"`
+	PartitionKey     string                    `json:"partition_key"`
+	Status           string                    `json:"status"`
+	ExternalKey      string                    `json:"external_key"`
+	PayloadJSON      string                    `json:"payload_json"`
+	ErrorMessage     string                    `json:"error_message"`
+	QueuedAt         string                    `json:"queued_at"`
+	StartedAt        string                    `json:"started_at"`
+	CompletedAt      string                    `json:"completed_at"`
+	Metadata         map[string]map[string]any `json:"metadata"`
 }
 
 type QueuesGetManyRequest struct {
