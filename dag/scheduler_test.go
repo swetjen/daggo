@@ -578,3 +578,141 @@ func TestSchedulerRunTick_SkipsRunCreationWhenDeployDrainActive(t *testing.T) {
 		t.Fatalf("expected no enqueued runs while deploy drain active, got %d", got)
 	}
 }
+
+func TestSchedulerHealthTracksLoopLiveness(t *testing.T) {
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+
+	scheduler := NewScheduler(queries, pool, nil, SchedulerOptions{
+		TickInterval: time.Hour,
+		Registry:     NewRegistry(),
+	})
+
+	if health := scheduler.Health(); health.Alive || health.State != SchedulerStateNotStarted {
+		t.Fatalf("expected a scheduler that was never started to be not alive, got %+v", health)
+	}
+
+	var clockMu sync.Mutex
+	clock := time.Now()
+	scheduler.healthNowFn = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		clock = clock.Add(d)
+		clockMu.Unlock()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler.Start(ctx)
+
+	if health := scheduler.Health(); !health.Alive || health.State != SchedulerStateRunning {
+		t.Fatalf("expected a started scheduler to be alive, got %+v", health)
+	}
+	waitFor(t, 5*time.Second, func() bool { return !scheduler.Health().LastTickAt.IsZero() })
+
+	advance(scheduler.staleAfter())
+	if health := scheduler.Health(); !health.Alive {
+		t.Fatalf("expected scheduler to be alive at the staleness threshold, got %+v", health)
+	}
+	advance(time.Second)
+	if health := scheduler.Health(); health.Alive || health.State != SchedulerStateStalled {
+		t.Fatalf("expected scheduler to be stalled after missing ticks, got %+v", health)
+	}
+
+	cancel()
+	waitFor(t, 5*time.Second, func() bool { return scheduler.Health().State == SchedulerStateStopped })
+	if scheduler.Health().Alive {
+		t.Fatalf("expected a stopped scheduler to be not alive")
+	}
+}
+
+func TestSchedulerStaleAfterHasAFloor(t *testing.T) {
+	t.Parallel()
+
+	fast := NewScheduler(nil, nil, nil, SchedulerOptions{TickInterval: time.Second})
+	if got := fast.staleAfter(); got != minSchedulerStaleAfter {
+		t.Fatalf("staleAfter = %s, want floor %s", got, minSchedulerStaleAfter)
+	}
+	slow := NewScheduler(nil, nil, nil, SchedulerOptions{TickInterval: time.Minute})
+	if got := slow.staleAfter(); got != 3*time.Minute {
+		t.Fatalf("staleAfter = %s, want %s", got, 3*time.Minute)
+	}
+}
+
+func TestSchedulerRunTick_StopsCreatingRunsOnceAShutdownDrainBegins(t *testing.T) {
+	ctx := context.Background()
+	queries, pool, err := db.NewTest()
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = pool.Close()
+	})
+
+	job := NewJob("scheduler_shutdown_drain").
+		Add(
+			Op[NoInput, schedulerSourceOutput]("source", func(_ context.Context, _ NoInput) (schedulerSourceOutput, error) {
+				return schedulerSourceOutput{Value: 1}, nil
+			}),
+		).
+		AddSchedule(ScheduleDefinition{
+			Key:      "every_minute",
+			CronExpr: "* * * * *",
+			Timezone: "UTC",
+			Enabled:  true,
+		}).
+		MustBuild()
+
+	registry := NewRegistry()
+	if err := registry.Register(job); err != nil {
+		t.Fatalf("register job: %v", err)
+	}
+	if err := registry.SyncToDB(ctx, queries, pool); err != nil {
+		t.Fatalf("sync registry: %v", err)
+	}
+
+	// No lock file is involved: the drain is started the way a termination
+	// signal starts it.
+	deployLock := NewDeployLock(filepath.Join(t.TempDir(), "WILL_DEPLOY"), time.Second, 30*time.Second)
+
+	now := time.Date(2026, time.February, 23, 18, 6, 2, 0, time.UTC)
+	enqueuer := &recordingEnqueuer{}
+	scheduler := NewScheduler(queries, pool, enqueuer, SchedulerOptions{
+		SchedulerKey:  "test-shutdown-drain",
+		TickInterval:  15 * time.Second,
+		MaxDuePerTick: 4,
+		DeployLock:    deployLock,
+		Registry:      registry,
+	})
+	scheduler.nowFn = func() time.Time { return now }
+
+	scheduler.runTick(ctx)
+	if got := len(enqueuer.IDs()); got != 1 {
+		t.Fatalf("expected the due run to be enqueued before the drain, got %d", got)
+	}
+
+	deployLock.BeginDrain("signal terminated")
+
+	now = now.Add(time.Minute)
+	scheduler.runTick(ctx)
+	now = now.Add(time.Minute)
+	scheduler.runTick(ctx)
+
+	if got := len(enqueuer.IDs()); got != 1 {
+		t.Fatalf("expected no runs to be enqueued after the drain began, got %d in total", got)
+	}
+	runRows, err := queries.RunGetMany(ctx, db.RunGetManyParams{Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("load runs: %v", err)
+	}
+	if len(runRows) != 1 {
+		t.Fatalf("expected no runs to be created after the drain began, got %d in total", len(runRows))
+	}
+}
